@@ -248,6 +248,11 @@ const AppContent: React.FC = () => {
     }
   };
 
+  // Проверяем, находится ли символ в избранном
+  const isSymbolFavorite = (symbol: string): boolean => {
+    return favorites.some(fav => fav.symbol === symbol);
+  };
+
   const openTradingView = (symbol: string) => {
     const cleanSymbol = symbol.replace('USDT', '');
     const url = `https://www.tradingview.com/chart/?symbol=BYBIT:${cleanSymbol}USDT.P&interval=1`;
@@ -268,175 +273,221 @@ const AppContent: React.FC = () => {
     setShowRealTrading(true);
   };
 
-  const renderAlertRow = (alert: Alert) => (
-    <div
-      key={alert.id}
-      className="bg-white rounded-lg shadow border-l-4 border-blue-500 p-4 hover:shadow-md transition-shadow cursor-pointer"
-      onClick={() => setSelectedAlert(alert)}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <div className={`w-3 h-3 rounded-full ${
-            alert.alert_type === 'volume_spike' ? 'bg-blue-500' :
-            alert.alert_type === 'consecutive_long' ? 'bg-green-500' :
-            alert.alert_type === 'priority' ? 'bg-purple-500' : 'bg-gray-500'
-          }`}></div>
-          
-          <div>
-            <span className="font-semibold text-gray-900 text-lg">{alert.symbol}</span>
-            <div className="flex items-center space-x-2 text-sm">
-              <span className={`px-2 py-1 rounded text-xs font-medium ${
-                alert.alert_type === 'volume_spike' ? 'bg-blue-100 text-blue-800' :
-                alert.alert_type === 'consecutive_long' ? 'bg-green-100 text-green-800' :
-                alert.alert_type === 'priority' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
-              }`}>
-                {alert.alert_type === 'volume_spike' ? 'Превышение объема' :
-                 alert.alert_type === 'consecutive_long' ? 'LONG последовательность' :
-                 alert.alert_type === 'priority' ? 'Приоритетный' : 'Неизвестный'}
-              </span>
-              {alert.volume_ratio && (
-                <span className="text-blue-600">
-                  x{alert.volume_ratio.toFixed(1)}
+  const renderAlertRow = (alert: Alert) => {
+    const isFavorite = isSymbolFavorite(alert.symbol);
+    
+    return (
+      <div
+        key={alert.id}
+        className="bg-white rounded-lg shadow border-l-4 border-blue-500 p-4 hover:shadow-md transition-shadow cursor-pointer"
+        onClick={() => setSelectedAlert(alert)}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <div className={`w-3 h-3 rounded-full ${
+              alert.alert_type === 'volume_spike' ? 'bg-blue-500' :
+              alert.alert_type === 'consecutive_long' ? 'bg-green-500' :
+              alert.alert_type === 'priority' ? 'bg-purple-500' : 'bg-gray-500'
+            }`}></div>
+            
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="font-semibold text-gray-900 text-lg">{alert.symbol}</span>
+                {isFavorite && (
+                  <Heart className="w-4 h-4 text-yellow-500 fill-yellow-500" />
+                )}
+              </div>
+              <div className="flex items-center space-x-2 text-sm">
+                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                  alert.alert_type === 'volume_spike' ? 'bg-blue-100 text-blue-800' :
+                  alert.alert_type === 'consecutive_long' ? 'bg-green-100 text-green-800' :
+                  alert.alert_type === 'priority' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
+                }`}>
+                  {alert.alert_type === 'volume_spike' ? 'Превышение объема' :
+                   alert.alert_type === 'consecutive_long' ? 'LONG последовательность' :
+                   alert.alert_type === 'priority' ? 'Приоритетный' : 'Неизвестный'}
                 </span>
-              )}
-              {alert.consecutive_count && (
-                <span className="text-green-600">
-                  {alert.consecutive_count} подряд
-                </span>
-              )}
-              {alert.has_imbalance && (
-                <span className="text-orange-500">⚠️ Имбаланс</span>
-              )}
+                {alert.volume_ratio && (
+                  <span className="text-blue-600">
+                    x{alert.volume_ratio.toFixed(1)}
+                  </span>
+                )}
+                {alert.consecutive_count && (
+                  <span className="text-green-600">
+                    {alert.consecutive_count} подряд
+                  </span>
+                )}
+                {alert.has_imbalance && (
+                  <span className="text-orange-500">⚠️ Имбаланс</span>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-        
-        <div className="text-right">
-          <div className="text-xl font-bold text-gray-900">
-            ${alert.price.toFixed(8)}
+          
+          <div className="text-right">
+            <div className="text-xl font-bold text-gray-900">
+              ${alert.price.toFixed(8)}
+            </div>
+            <div className="text-sm text-gray-600">
+              <Clock className="w-3 h-3 inline mr-1" />
+              {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
+            </div>
           </div>
-          <div className="text-sm text-gray-600">
-            <Clock className="w-3 h-3 inline mr-1" />
-            {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
+          
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleToggleFavorite(alert.symbol, isFavorite);
+              }}
+              className={`p-1 ${
+                isFavorite
+                  ? 'text-yellow-500 hover:text-yellow-600'
+                  : 'text-gray-400 hover:text-yellow-500'
+              }`}
+              title={isFavorite ? "Удалить из избранного" : "Добавить в избранное"}
+            >
+              <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openPaperTrading(alert.symbol, alert.price, alert.id);
+              }}
+              className="text-green-600 hover:text-green-800 p-1"
+              title="Бумажная торговля"
+            >
+              <Calculator className="w-4 h-4" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openRealTrading(alert.symbol, alert.price, alert.id);
+              }}
+              className="text-purple-600 hover:text-purple-800 p-1"
+              title="Реальная торговля"
+            >
+              <DollarSign className="w-4 h-4" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openTradingView(alert.symbol);
+              }}
+              className="text-blue-600 hover:text-blue-800 p-1"
+              title="Открыть в TradingView"
+            >
+              <ExternalLink className="w-4 h-4" />
+            </button>
           </div>
-        </div>
-        
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              openPaperTrading(alert.symbol, alert.price, alert.id);
-            }}
-            className="text-green-600 hover:text-green-800 p-1"
-            title="Бумажная торговля"
-          >
-            <Calculator className="w-4 h-4" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              openRealTrading(alert.symbol, alert.price, alert.id);
-            }}
-            className="text-purple-600 hover:text-purple-800 p-1"
-            title="Реальная торговля"
-          >
-            <DollarSign className="w-4 h-4" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              openTradingView(alert.symbol);
-            }}
-            className="text-blue-600 hover:text-blue-800 p-1"
-            title="Открыть в TradingView"
-          >
-            <ExternalLink className="w-4 h-4" />
-          </button>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
-  const renderSmartMoneyAlertRow = (alert: SmartMoneyAlert) => (
-    <div
-      key={alert.id}
-      className="bg-white rounded-lg shadow border-l-4 border-purple-500 p-4 hover:shadow-md transition-shadow cursor-pointer"
-      onClick={() => setSelectedSmartMoneyAlert(alert)}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <div className={`w-3 h-3 rounded-full ${
-            alert.direction === 'bullish' ? 'bg-green-500' : 'bg-red-500'
-          }`}></div>
-          
-          <div>
-            <span className="font-semibold text-gray-900 text-lg">{alert.symbol}</span>
-            <div className="flex items-center space-x-2 text-sm">
-              <span className={`px-2 py-1 rounded text-xs font-medium ${
-                alert.type === 'fair_value_gap' ? 'bg-blue-100 text-blue-800' :
-                alert.type === 'order_block' ? 'bg-green-100 text-green-800' :
-                'bg-red-100 text-red-800'
-              }`}>
-                {alert.type === 'fair_value_gap' ? 'Fair Value Gap' :
-                 alert.type === 'order_block' ? 'Order Block' : 'Breaker Block'}
-              </span>
-              <span className={`text-xs ${
-                alert.direction === 'bullish' ? 'text-green-600' : 'text-red-600'
-              }`}>
-                {alert.direction === 'bullish' ? 'Бычий' : 'Медвежий'}
-              </span>
-              <span className="text-purple-600">
-                Сила: {alert.strength.toFixed(1)}%
-              </span>
+  const renderSmartMoneyAlertRow = (alert: SmartMoneyAlert) => {
+    const isFavorite = isSymbolFavorite(alert.symbol);
+    
+    return (
+      <div
+        key={alert.id}
+        className="bg-white rounded-lg shadow border-l-4 border-purple-500 p-4 hover:shadow-md transition-shadow cursor-pointer"
+        onClick={() => setSelectedSmartMoneyAlert(alert)}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <div className={`w-3 h-3 rounded-full ${
+              alert.direction === 'bullish' ? 'bg-green-500' : 'bg-red-500'
+            }`}></div>
+            
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="font-semibold text-gray-900 text-lg">{alert.symbol}</span>
+                {isFavorite && (
+                  <Heart className="w-4 h-4 text-yellow-500 fill-yellow-500" />
+                )}
+              </div>
+              <div className="flex items-center space-x-2 text-sm">
+                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                  alert.type === 'fair_value_gap' ? 'bg-blue-100 text-blue-800' :
+                  alert.type === 'order_block' ? 'bg-green-100 text-green-800' :
+                  'bg-red-100 text-red-800'
+                }`}>
+                  {alert.type === 'fair_value_gap' ? 'Fair Value Gap' :
+                   alert.type === 'order_block' ? 'Order Block' : 'Breaker Block'}
+                </span>
+                <span className={`text-xs ${
+                  alert.direction === 'bullish' ? 'text-green-600' : 'text-red-600'
+                }`}>
+                  {alert.direction === 'bullish' ? 'Бычий' : 'Медвежий'}
+                </span>
+                <span className="text-purple-600">
+                  Сила: {alert.strength.toFixed(1)}%
+                </span>
+              </div>
             </div>
           </div>
-        </div>
-        
-        <div className="text-right">
-          <div className="text-xl font-bold text-gray-900">
-            ${alert.price.toFixed(8)}
+          
+          <div className="text-right">
+            <div className="text-xl font-bold text-gray-900">
+              ${alert.price.toFixed(8)}
+            </div>
+            <div className="text-sm text-gray-600">
+              <Clock className="w-3 h-3 inline mr-1" />
+              {formatTime(alert.timestamp, timeZone)}
+            </div>
           </div>
-          <div className="text-sm text-gray-600">
-            <Clock className="w-3 h-3 inline mr-1" />
-            {formatTime(alert.timestamp, timeZone)}
+          
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleToggleFavorite(alert.symbol, isFavorite);
+              }}
+              className={`p-1 ${
+                isFavorite
+                  ? 'text-yellow-500 hover:text-yellow-600'
+                  : 'text-gray-400 hover:text-yellow-500'
+              }`}
+              title={isFavorite ? "Удалить из избранного" : "Добавить в избранное"}
+            >
+              <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openPaperTrading(alert.symbol, alert.price);
+              }}
+              className="text-green-600 hover:text-green-800 p-1"
+              title="Бумажная торговля"
+            >
+              <Calculator className="w-4 h-4" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openRealTrading(alert.symbol, alert.price);
+              }}
+              className="text-purple-600 hover:text-purple-800 p-1"
+              title="Реальная торговля"
+            >
+              <DollarSign className="w-4 h-4" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openTradingView(alert.symbol);
+              }}
+              className="text-blue-600 hover:text-blue-800 p-1"
+              title="Открыть в TradingView"
+            >
+              <ExternalLink className="w-4 h-4" />
+            </button>
           </div>
-        </div>
-        
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              openPaperTrading(alert.symbol, alert.price);
-            }}
-            className="text-green-600 hover:text-green-800 p-1"
-            title="Бумажная торговля"
-          >
-            <Calculator className="w-4 h-4" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              openRealTrading(alert.symbol, alert.price);
-            }}
-            className="text-purple-600 hover:text-purple-800 p-1"
-            title="Реальная торговля"
-          >
-            <DollarSign className="w-4 h-4" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              openTradingView(alert.symbol);
-            }}
-            className="text-blue-600 hover:text-blue-800 p-1"
-            title="Открыть в TradingView"
-          >
-            <ExternalLink className="w-4 h-4" />
-          </button>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderFavoriteRow = (favorite: FavoriteItem) => (
     <div
@@ -699,7 +750,7 @@ const AppContent: React.FC = () => {
               <div className="text-center py-12 text-gray-500">
                 <Heart className="w-12 h-12 mx-auto mb-4 text-gray-300" />
                 <p>Нет избранных торговых пар</p>
-                <p className="mt-2 text-sm">Добавьте пары в избранное из списка наблюдения</p>
+                <p className="mt-2 text-sm">Добавьте пары в избранное, нажав на иконку сердечка в сигналах</p>
               </div>
             ) : (
               favorites.map(renderFavoriteRow)

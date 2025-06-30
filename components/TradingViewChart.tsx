@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator, TrendingUp, TrendingDown, Clock } from 'lucide-react';
+import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator, TrendingUp, TrendingDown, Clock, BarChart3, Globe } from 'lucide-react';
 import PaperTradingModal from './PaperTradingModal';
 import RealTradingModal from './RealTradingModal';
+import CoinGeckoChart from './CoinGeckoChart';
+import ChartModal from './ChartModal';
 import { useTimeZone } from '../contexts/TimeZoneContext';
 import { formatTime } from '../utils/timeUtils';
 
@@ -17,12 +19,15 @@ interface TradingViewChartProps {
 declare global {
   interface Window {
     LightweightCharts: any;
+    Chart: any;
   }
 }
 
-// Глобальное состояние для управления скриптом Lightweight Charts
+// Глобальное состояние для управления библиотеками графиков
 let lightweightChartsLoaded = false;
 let lightweightChartsPromise: Promise<void> | null = null;
+let chartJsLoaded = false;
+let chartJsPromise: Promise<void> | null = null;
 
 const TradingViewChart: React.FC<TradingViewChartProps> = ({ 
   symbol, 
@@ -48,6 +53,8 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const [tradingDirection, setTradingDirection] = useState<'LONG' | 'SHORT'>('LONG');
   const [chartData, setChartData] = useState<any[]>([]);
   const [dataSource, setDataSource] = useState<'api' | 'mock'>('api');
+  const [chartLibrary, setChartLibrary] = useState<'lightweight' | 'chartjs' | 'fallback'>('lightweight');
+  const [showFallbackOptions, setShowFallbackOptions] = useState(false);
   
   const { timeZone } = useTimeZone();
 
@@ -62,7 +69,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   }, []);
 
   useEffect(() => {
-    if (lightweightChartsLoaded && mountedRef.current) {
+    if ((lightweightChartsLoaded || chartJsLoaded) && mountedRef.current) {
       loadChartData();
     }
   }, [symbol, interval]);
@@ -71,15 +78,36 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     try {
       setIsLoading(true);
       setError(null);
+      setShowFallbackOptions(false);
       
-      await loadLightweightChartsScript();
+      // Пробуем загрузить Lightweight Charts
+      try {
+        await loadLightweightChartsScript();
+        setChartLibrary('lightweight');
+        console.log('✅ Используем Lightweight Charts');
+      } catch (lightweightError) {
+        console.warn('❌ Lightweight Charts не загружен, пробуем Chart.js:', lightweightError);
+        
+        // Если Lightweight Charts не загрузился, пробуем Chart.js
+        try {
+          await loadChartJsScript();
+          setChartLibrary('chartjs');
+          console.log('✅ Используем Chart.js как альтернативу');
+        } catch (chartJsError) {
+          console.error('❌ Chart.js тоже не загружен:', chartJsError);
+          setChartLibrary('fallback');
+          setShowFallbackOptions(true);
+          setError('Библиотеки графиков недоступны. Используйте альтернативные варианты.');
+        }
+      }
       
-      if (mountedRef.current) {
+      if (mountedRef.current && (lightweightChartsLoaded || chartJsLoaded)) {
         await loadChartData();
       }
     } catch (err) {
       if (mountedRef.current) {
-        setError('Ошибка загрузки библиотеки графиков');
+        setError('Ошибка инициализации графиков');
+        setShowFallbackOptions(true);
         setIsLoading(false);
       }
     }
@@ -126,13 +154,21 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
         return;
       }
 
-      // Создаем новый скрипт
+      // Создаем новый скрипт с таймаутом
       const script = document.createElement('script');
       script.src = 'https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js';
       script.async = true;
       script.defer = true;
       
+      // Таймаут для загрузки скрипта
+      const timeout = setTimeout(() => {
+        script.remove();
+        lightweightChartsPromise = null;
+        reject(new Error('Lightweight Charts loading timeout'));
+      }, 10000); // 10 секунд
+      
       script.onload = () => {
+        clearTimeout(timeout);
         console.log('Lightweight Charts script loaded successfully');
         if (window.LightweightCharts) {
           lightweightChartsLoaded = true;
@@ -143,6 +179,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       };
       
       script.onerror = () => {
+        clearTimeout(timeout);
         console.error('Failed to load Lightweight Charts script');
         lightweightChartsPromise = null;
         reject(new Error('Script loading failed'));
@@ -152,6 +189,62 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     });
 
     return lightweightChartsPromise;
+  };
+
+  const loadChartJsScript = (): Promise<void> => {
+    // Если библиотека уже загружена
+    if (window.Chart && chartJsLoaded) {
+      return Promise.resolve();
+    }
+
+    // Если уже есть промис загрузки
+    if (chartJsPromise) {
+      return chartJsPromise;
+    }
+
+    // Создаем новый промис загрузки
+    chartJsPromise = new Promise((resolve, reject) => {
+      // Удаляем существующие скрипты Chart.js
+      const existingScripts = document.querySelectorAll('script[src*="chart"]');
+      existingScripts.forEach(script => {
+        if (script.getAttribute('src')?.includes('chart.js') || script.getAttribute('src')?.includes('chart.umd')) {
+          script.remove();
+        }
+      });
+
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js';
+      script.async = true;
+      
+      // Таймаут для загрузки скрипта
+      const timeout = setTimeout(() => {
+        script.remove();
+        chartJsPromise = null;
+        reject(new Error('Chart.js loading timeout'));
+      }, 8000); // 8 секунд
+      
+      script.onload = () => {
+        clearTimeout(timeout);
+        console.log('Chart.js script loaded successfully');
+        if (window.Chart) {
+          chartJsLoaded = true;
+          resolve();
+        } else {
+          reject(new Error('Chart.js not available after script load'));
+        }
+      };
+      
+      script.onerror = () => {
+        clearTimeout(timeout);
+        console.error('Failed to load Chart.js script');
+        chartJsPromise = null;
+        reject(new Error('Chart.js loading failed'));
+      };
+      
+      document.head.appendChild(script);
+    });
+
+    return chartJsPromise;
   };
 
   const generateMockData = () => {
@@ -230,7 +323,11 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       setChartData(candleData);
       
       if (mountedRef.current) {
-        createChart(candleData);
+        if (chartLibrary === 'lightweight') {
+          createLightweightChart(candleData);
+        } else if (chartLibrary === 'chartjs') {
+          createChartJsChart(candleData);
+        }
       }
     } catch (err) {
       if (mountedRef.current) {
@@ -239,12 +336,16 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
         const mockData = generateMockData();
         setChartData(mockData);
         setDataSource('mock');
-        createChart(mockData);
+        if (chartLibrary === 'lightweight') {
+          createLightweightChart(mockData);
+        } else if (chartLibrary === 'chartjs') {
+          createChartJsChart(mockData);
+        }
       }
     }
   };
 
-  const createChart = (data: any[]) => {
+  const createLightweightChart = (data: any[]) => {
     if (!containerRef.current || !window.LightweightCharts || !mountedRef.current) {
       return;
     }
@@ -363,11 +464,164 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       setError(null);
       setRetryCount(0);
 
-      console.log('Chart created successfully with', data.length, 'data points');
+      console.log('Lightweight Chart created successfully with', data.length, 'data points');
     } catch (error) {
-      console.error('Ошибка создания графика:', error);
+      console.error('Ошибка создания Lightweight Chart:', error);
+      if (mountedRef.current) {
+        // Пробуем Chart.js как fallback
+        setChartLibrary('chartjs');
+        loadChartJsScript().then(() => {
+          createChartJsChart(data);
+        }).catch(() => {
+          setError('Ошибка создания графика');
+          setShowFallbackOptions(true);
+          setIsLoading(false);
+        });
+      }
+    }
+  };
+
+  const createChartJsChart = (data: any[]) => {
+    if (!containerRef.current || !window.Chart || !mountedRef.current) {
+      return;
+    }
+
+    // Очищаем предыдущий график
+    cleanupChart();
+
+    try {
+      // Создаем canvas элемент
+      const canvas = document.createElement('canvas');
+      canvas.width = containerRef.current.clientWidth;
+      canvas.height = containerRef.current.clientHeight;
+      containerRef.current.appendChild(canvas);
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Cannot get canvas context');
+      }
+
+      // Подготавливаем данные для Chart.js
+      const labels = data.map(item => {
+        const date = new Date(item.timestamp);
+        return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      });
+
+      const prices = data.map(item => item.close);
+      const volumes = data.map(item => item.volume_usdt || item.volume);
+
+      // Создаем график
+      chartRef.current = new window.Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Цена (USD)',
+              data: prices,
+              borderColor: '#3b82f6',
+              backgroundColor: 'rgba(59, 130, 246, 0.1)',
+              borderWidth: 2,
+              fill: true,
+              tension: 0.1,
+              yAxisID: 'y'
+            },
+            {
+              label: 'Объем (USD)',
+              data: volumes,
+              type: 'bar',
+              backgroundColor: 'rgba(16, 185, 129, 0.3)',
+              borderColor: 'rgba(16, 185, 129, 0.8)',
+              borderWidth: 1,
+              yAxisID: 'y1'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
+          plugins: {
+            title: {
+              display: true,
+              text: `${symbol} - Chart.js (Альтернативный график)`,
+              font: {
+                size: 16,
+                weight: 'bold'
+              }
+            },
+            legend: {
+              display: true,
+              position: 'top'
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  if (context.datasetIndex === 0) {
+                    return `Цена: $${context.parsed.y.toLocaleString()}`;
+                  } else {
+                    return `Объем: $${(context.parsed.y / 1000000).toFixed(2)}M`;
+                  }
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              display: true,
+              title: {
+                display: true,
+                text: 'Время'
+              }
+            },
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Цена (USD)'
+              },
+              ticks: {
+                callback: function(value) {
+                  return '$' + Number(value).toLocaleString();
+                }
+              }
+            },
+            y1: {
+              type: 'linear',
+              display: true,
+              position: 'right',
+              title: {
+                display: true,
+                text: 'Объем (USD)'
+              },
+              grid: {
+                drawOnChartArea: false,
+              },
+              ticks: {
+                callback: function(value) {
+                  return '$' + (Number(value) / 1000000).toFixed(1) + 'M';
+                }
+              }
+            }
+          }
+        }
+      });
+
+      setIsLoading(false);
+      setError(null);
+      setRetryCount(0);
+
+      console.log('Chart.js chart created successfully with', data.length, 'data points');
+    } catch (error) {
+      console.error('Ошибка создания Chart.js:', error);
       if (mountedRef.current) {
         setError('Ошибка создания графика');
+        setShowFallbackOptions(true);
         setIsLoading(false);
       }
     }
@@ -415,11 +669,20 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const cleanupChart = () => {
     if (chartRef.current) {
       try {
-        chartRef.current.remove();
+        if (chartLibrary === 'lightweight') {
+          chartRef.current.remove();
+        } else if (chartLibrary === 'chartjs') {
+          chartRef.current.destroy();
+        }
       } catch (e) {
         console.log('Chart cleanup error:', e);
       }
       chartRef.current = null;
+    }
+    
+    // Очищаем контейнер
+    if (containerRef.current) {
+      containerRef.current.innerHTML = '';
     }
     
     candlestickSeriesRef.current = null;
@@ -445,18 +708,24 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     setError(null);
     setIsLoading(true);
     setRetryCount(prev => prev + 1);
+    setShowFallbackOptions(false);
     
     // Сбрасываем глобальное состояние
     lightweightChartsLoaded = false;
     lightweightChartsPromise = null;
+    chartJsLoaded = false;
+    chartJsPromise = null;
 
     // Удаляем существующие скрипты
-    const existingScripts = document.querySelectorAll('script[src*="lightweight-charts"]');
+    const existingScripts = document.querySelectorAll('script[src*="lightweight-charts"], script[src*="chart.js"], script[src*="chart.umd"]');
     existingScripts.forEach(script => script.remove());
 
-    // Очищаем LightweightCharts из window
+    // Очищаем библиотеки из window
     if (window.LightweightCharts) {
       delete window.LightweightCharts;
+    }
+    if (window.Chart) {
+      delete window.Chart;
     }
 
     // Перезагружаем через небольшую задержку
@@ -514,6 +783,14 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                   Demo данные
                 </span>
               )}
+              <span className={`text-sm px-2 py-1 rounded ${
+                chartLibrary === 'lightweight' ? 'text-green-600 bg-green-100' :
+                chartLibrary === 'chartjs' ? 'text-blue-600 bg-blue-100' :
+                'text-red-600 bg-red-100'
+              }`}>
+                {chartLibrary === 'lightweight' ? 'Lightweight Charts' :
+                 chartLibrary === 'chartjs' ? 'Chart.js' : 'Fallback'}
+              </span>
               {error && (
                 <span className="text-sm text-red-600 bg-red-100 px-2 py-1 rounded flex items-center">
                   <AlertTriangle className="w-3 h-3 mr-1" />
@@ -609,7 +886,9 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
                   <p className="text-gray-600">
-                    {!lightweightChartsLoaded ? 'Загрузка Lightweight Charts...' : 'Загрузка данных графика...'}
+                    {chartLibrary === 'lightweight' && !lightweightChartsLoaded ? 'Загрузка Lightweight Charts...' :
+                     chartLibrary === 'chartjs' && !chartJsLoaded ? 'Загрузка Chart.js...' :
+                     'Загрузка данных графика...'}
                   </p>
                   <p className="text-xs text-gray-500 mt-2">
                     Попытка {retryCount + 1} • {dataSource === 'mock' ? 'Используются demo данные' : 'Загрузка с API'}
@@ -638,8 +917,23 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                         Открыть в TradingView
                       </button>
                     </div>
+                    {showFallbackOptions && (
+                      <div className="mt-4 space-y-2">
+                        <p className="text-sm text-gray-600">Альтернативные варианты:</p>
+                        <div className="space-x-2">
+                          <CoinGeckoChart symbol={symbol} onClose={onClose} />
+                          <ChartModal alert={{
+                            id: 0,
+                            symbol,
+                            alert_type: 'fallback',
+                            price: alertPrice || 0,
+                            timestamp: alertTime || Date.now()
+                          }} onClose={onClose} />
+                        </div>
+                      </div>
+                    )}
                     <p className="text-xs text-gray-500">
-                      Библиотека загружена: {lightweightChartsLoaded ? 'Да' : 'Нет'} • 
+                      Библиотека: {chartLibrary} • 
                       Источник данных: {dataSource}
                     </p>
                   </div>
@@ -659,7 +953,8 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
             <div className="flex justify-between items-center text-sm text-gray-600">
               <span>
                 Данные: {dataSource === 'api' ? 'API Backend' : 'Demo данные'} • 
-                Powered by Lightweight Charts
+                График: {chartLibrary === 'lightweight' ? 'Lightweight Charts' :
+                         chartLibrary === 'chartjs' ? 'Chart.js' : 'Fallback'}
               </span>
               <div className="flex items-center space-x-4">
                 <span>📈 LONG: прибыль при росте</span>
