@@ -1,9 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator, TrendingUp, TrendingDown, Clock, BarChart3, Globe, BarChart2, Activity } from 'lucide-react';
+import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator, TrendingUp, TrendingDown, Clock, RefreshCw } from 'lucide-react';
 import PaperTradingModal from './PaperTradingModal';
 import RealTradingModal from './RealTradingModal';
-import CoinGeckoChart from './CoinGeckoChart';
-import ChartModal from './ChartModal';
 import { useTimeZone } from '../contexts/TimeZoneContext';
 import { formatTime } from '../utils/timeUtils';
 
@@ -20,15 +18,12 @@ interface TradingViewChartProps {
 declare global {
   interface Window {
     LightweightCharts: any;
-    Chart: any;
   }
 }
 
-// Глобальное состояние для управления библиотеками графиков
+// Глобальное состояние для управления Lightweight Charts
 let lightweightChartsLoaded = false;
 let lightweightChartsPromise: Promise<void> | null = null;
-let chartJsLoaded = false;
-let chartJsPromise: Promise<void> | null = null;
 
 const TradingViewChart: React.FC<TradingViewChartProps> = ({ 
   symbol, 
@@ -44,6 +39,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const candlestickSeriesRef = useRef<any>(null);
   const volumeSeriesRef = useRef<any>(null);
   const mountedRef = useRef(true);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
   
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [interval, setInterval] = useState('1m');
@@ -55,12 +51,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const [tradingDirection, setTradingDirection] = useState<'LONG' | 'SHORT'>('LONG');
   const [chartData, setChartData] = useState<any[]>([]);
   const [dataSource, setDataSource] = useState<'api' | 'mock'>('api');
-  const [chartLibrary, setChartLibrary] = useState<'lightweight' | 'chartjs' | 'fallback'>('lightweight');
-  const [showFallbackOptions, setShowFallbackOptions] = useState(false);
-  
-  // Новые состояния для типов графиков
-  const [chartType, setChartType] = useState<'candlestick' | 'line' | 'bar'>('candlestick');
-  const [showVolume, setShowVolume] = useState(true);
+  const [chartReady, setChartReady] = useState(false);
   
   const { timeZone } = useTimeZone();
 
@@ -71,63 +62,40 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     return () => {
       mountedRef.current = false;
       cleanupChart();
+      cleanupResizeObserver();
     };
   }, []);
 
   useEffect(() => {
-    if ((lightweightChartsLoaded || chartJsLoaded) && mountedRef.current) {
+    if (chartReady && mountedRef.current) {
       loadChartData();
     }
-  }, [symbol, interval]);
+  }, [symbol, interval, chartReady]);
 
-  // Пересоздаем график при изменении типа
   useEffect(() => {
-    if (chartData.length > 0 && mountedRef.current) {
-      if (chartLibrary === 'lightweight') {
-        createLightweightChart(chartData);
-      } else if (chartLibrary === 'chartjs') {
-        createChartJsChart(chartData);
-      }
+    if (chartReady && chartData.length > 0 && mountedRef.current) {
+      createChart();
     }
-  }, [chartType, showVolume]);
+  }, [chartData, chartReady]);
 
   const initializeChart = async () => {
     try {
       setIsLoading(true);
       setError(null);
-      setShowFallbackOptions(false);
       
-      // Пробуем загрузить Lightweight Charts
-      try {
-        await loadLightweightChartsScript();
-        setChartLibrary('lightweight');
-        console.log('✅ Используем Lightweight Charts');
-      } catch (lightweightError) {
-        console.warn('❌ Lightweight Charts не загружен, пробуем Chart.js:', lightweightError);
-        
-        // Если Lightweight Charts не загрузился, пробуем Chart.js
-        try {
-          await loadChartJsScript();
-          setChartLibrary('chartjs');
-          console.log('✅ Используем Chart.js как альтернативу');
-        } catch (chartJsError) {
-          console.error('❌ Chart.js тоже не загружен:', chartJsError);
-          setChartLibrary('fallback');
-          setShowFallbackOptions(true);
-          setError('Библиотеки графиков недоступны. Используйте альтернативные варианты.');
-          if (onError) onError();
-        }
-      }
+      await loadLightweightChartsScript();
       
-      if (mountedRef.current && (lightweightChartsLoaded || chartJsLoaded)) {
-        await loadChartData();
+      if (mountedRef.current) {
+        setChartReady(true);
       }
     } catch (err) {
+      console.error('Ошибка инициализации Lightweight Charts:', err);
       if (mountedRef.current) {
-        setError('Ошибка инициализации графиков');
-        setShowFallbackOptions(true);
+        setError('Ошибка загрузки библиотеки графиков');
         setIsLoading(false);
-        if (onError) onError();
+        if (onError) {
+          setTimeout(() => onError(), 1000); // Даем время показать ошибку
+        }
       }
     }
   };
@@ -156,114 +124,85 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
         }
         
         // Ждем загрузки существующего скрипта
-        existingScript.addEventListener('load', () => {
+        const loadHandler = () => {
           if (window.LightweightCharts) {
             lightweightChartsLoaded = true;
             resolve();
           } else {
             reject(new Error('LightweightCharts not available after script load'));
           }
-        });
+        };
         
-        existingScript.addEventListener('error', () => {
+        const errorHandler = () => {
           lightweightChartsPromise = null;
-          reject(new Error('Script loading failed'));
-        });
+          reject(new Error('Existing script loading failed'));
+        };
+        
+        existingScript.addEventListener('load', loadHandler);
+        existingScript.addEventListener('error', errorHandler);
+        
+        // Очистка обработчиков через 15 секунд
+        setTimeout(() => {
+          existingScript.removeEventListener('load', loadHandler);
+          existingScript.removeEventListener('error', errorHandler);
+          if (!lightweightChartsLoaded) {
+            lightweightChartsPromise = null;
+            reject(new Error('Existing script loading timeout'));
+          }
+        }, 15000);
         
         return;
       }
 
-      // Создаем новый скрипт с таймаутом
+      // Создаем новый скрипт с улучшенной обработкой ошибок
       const script = document.createElement('script');
       script.src = 'https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js';
       script.async = true;
       script.defer = true;
+      script.crossOrigin = 'anonymous';
       
       // Таймаут для загрузки скрипта
       const timeout = setTimeout(() => {
         script.remove();
         lightweightChartsPromise = null;
         reject(new Error('Lightweight Charts loading timeout'));
-      }, 10000); // 10 секунд
+      }, 15000); // 15 секунд
       
       script.onload = () => {
         clearTimeout(timeout);
-        console.log('Lightweight Charts script loaded successfully');
+        console.log('✅ Lightweight Charts script loaded successfully');
+        
+        // Дополнительная проверка доступности
         if (window.LightweightCharts) {
           lightweightChartsLoaded = true;
           resolve();
         } else {
-          reject(new Error('LightweightCharts not available after script load'));
+          // Даем дополнительное время для инициализации
+          setTimeout(() => {
+            if (window.LightweightCharts) {
+              lightweightChartsLoaded = true;
+              resolve();
+            } else {
+              reject(new Error('LightweightCharts not available after script load'));
+            }
+          }, 500);
         }
       };
       
-      script.onerror = () => {
+      script.onerror = (event) => {
         clearTimeout(timeout);
-        console.error('Failed to load Lightweight Charts script');
+        console.error('❌ Failed to load Lightweight Charts script:', event);
+        script.remove();
         lightweightChartsPromise = null;
         reject(new Error('Script loading failed'));
       };
       
+      // Добавляем скрипт в head
       document.head.appendChild(script);
+      console.log('📥 Loading Lightweight Charts script...');
     });
 
     return lightweightChartsPromise;
-  };
-
-  const loadChartJsScript = (): Promise<void> => {
-    // Если библиотека уже загружена
-    if (window.Chart && chartJsLoaded) {
-      return Promise.resolve();
-    }
-
-    // Если уже есть промис загрузки
-    if (chartJsPromise) {
-      return chartJsPromise;
-    }
-
-    // Создаем новый промис загрузки
-    chartJsPromise = new Promise((resolve, reject) => {
-      // Удаляем существующие скрипты Chart.js
-      const existingScripts = document.querySelectorAll('script[src*="chart"]');
-      existingScripts.forEach(script => {
-        if (script.getAttribute('src')?.includes('chart.js') || script.getAttribute('src')?.includes('chart.umd')) {
-          script.remove();
-        }
-      });
-
-      const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js';
-      script.async = true;
-      
-      // Таймаут для загрузки скрипта
-      const timeout = setTimeout(() => {
-        script.remove();
-        chartJsPromise = null;
-        reject(new Error('Chart.js loading timeout'));
-      }, 8000); // 8 секунд
-      
-      script.onload = () => {
-        clearTimeout(timeout);
-        console.log('Chart.js script loaded successfully');
-        if (window.Chart) {
-          chartJsLoaded = true;
-          resolve();
-        } else {
-          reject(new Error('Chart.js not available after script load'));
-        }
-      };
-      
-      script.onerror = () => {
-        clearTimeout(timeout);
-        console.error('Failed to load Chart.js script');
-        chartJsPromise = null;
-        reject(new Error('Chart.js loading failed'));
-      };
-      
-      document.head.appendChild(script);
-    });
-
-    return chartJsPromise;
   };
 
   const generateMockData = () => {
@@ -271,8 +210,8 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     const data = [];
     let price = alertPrice || 50000;
     
-    // Генерируем 100 свечей за последние 100 минут
-    for (let i = 99; i >= 0; i--) {
+    // Генерируем 120 свечей за последние 2 часа
+    for (let i = 119; i >= 0; i--) {
       const timestamp = now - (i * 60 * 1000); // каждая свеча = 1 минута
       const change = (Math.random() - 0.5) * price * 0.02; // изменение до 2%
       const open = price;
@@ -310,7 +249,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       // Сначала пробуем загрузить данные с API
       try {
         const apiUrl = `/api/chart-data/${symbol}?interval=${interval}&hours=24`;
-        console.log('Загружаем данные с API:', apiUrl);
+        console.log('📊 Загружаем данные с API:', apiUrl);
         
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000);
@@ -329,43 +268,30 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           const data = await response.json();
           candleData = data.chart_data || data.data || data || [];
           setDataSource('api');
-          console.log('Данные загружены с API:', candleData.length, 'свечей');
+          console.log('✅ Данные загружены с API:', candleData.length, 'свечей');
         } else {
           throw new Error(`API вернул статус ${response.status}`);
         }
       } catch (apiError) {
-        console.warn('Ошибка загрузки с API, используем mock данные:', apiError);
+        console.warn('⚠️ Ошибка загрузки с API, используем mock данные:', apiError);
         candleData = generateMockData();
         setDataSource('mock');
       }
       
       setChartData(candleData);
-      
-      if (mountedRef.current) {
-        if (chartLibrary === 'lightweight') {
-          createLightweightChart(candleData);
-        } else if (chartLibrary === 'chartjs') {
-          createChartJsChart(candleData);
-        }
-      }
     } catch (err) {
       if (mountedRef.current) {
-        console.error('Ошибка загрузки данных графика:', err);
+        console.error('❌ Ошибка загрузки данных графика:', err);
         // В случае полной ошибки, все равно показываем mock данные
         const mockData = generateMockData();
         setChartData(mockData);
         setDataSource('mock');
-        if (chartLibrary === 'lightweight') {
-          createLightweightChart(mockData);
-        } else if (chartLibrary === 'chartjs') {
-          createChartJsChart(mockData);
-        }
       }
     }
   };
 
-  const createLightweightChart = (data: any[]) => {
-    if (!containerRef.current || !window.LightweightCharts || !mountedRef.current) {
+  const createChart = () => {
+    if (!containerRef.current || !window.LightweightCharts || !mountedRef.current || chartData.length === 0) {
       return;
     }
 
@@ -399,326 +325,117 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
       chartRef.current = chart;
 
-      // Добавляем серию в зависимости от типа графика
-      let mainSeries;
-      if (chartType === 'candlestick') {
-        mainSeries = chart.addCandlestickSeries({
-          upColor: '#26a69a',
-          downColor: '#ef5350',
-          borderVisible: false,
-          wickUpColor: '#26a69a',
-          wickDownColor: '#ef5350',
-        });
-      } else if (chartType === 'line') {
-        mainSeries = chart.addLineSeries({
-          color: '#2196f3',
-          lineWidth: 2,
-        });
-      } else { // bar
-        mainSeries = chart.addHistogramSeries({
-          color: '#2196f3',
-        });
-      }
-
-      candlestickSeriesRef.current = mainSeries;
-
-      // Добавляем серию объемов если включена
-      if (showVolume) {
-        const volumeSeries = chart.addHistogramSeries({
-          color: '#26a69a',
-          priceFormat: {
-            type: 'volume',
-          },
-          priceScaleId: 'volume',
-        });
-
-        volumeSeriesRef.current = volumeSeries;
-
-        // Настраиваем шкалу объемов
-        chart.priceScale('volume').applyOptions({
-          scaleMargins: {
-            top: 0.7,
-            bottom: 0,
-          },
-        });
-      }
-
-      // Подготавливаем данные для графика
-      if (data && data.length > 0) {
-        let mainData;
-        
-        if (chartType === 'candlestick') {
-          mainData = data.map(item => ({
-            time: Math.floor((item.timestamp || Date.now()) / 1000),
-            open: Number(item.open) || 0,
-            high: Number(item.high) || 0,
-            low: Number(item.low) || 0,
-            close: Number(item.close) || 0,
-          })).filter(item => item.open > 0 && item.high > 0 && item.low > 0 && item.close > 0);
-        } else {
-          mainData = data.map(item => ({
-            time: Math.floor((item.timestamp || Date.now()) / 1000),
-            value: Number(item.close) || 0,
-          })).filter(item => item.value > 0);
-        }
-
-        if (showVolume) {
-          const volumeData = data.map(item => ({
-            time: Math.floor((item.timestamp || Date.now()) / 1000),
-            value: Number(item.volume_usdt || item.volume) || 0,
-            color: item.is_long ? '#26a69a' : '#ef5350',
-          })).filter(item => item.value > 0);
-
-          if (volumeData.length > 0 && volumeSeriesRef.current) {
-            volumeSeriesRef.current.setData(volumeData);
-            console.log('Установлены данные объемов:', volumeData.length);
-          }
-        }
-
-        if (mainData.length > 0) {
-          mainSeries.setData(mainData);
-          console.log('Установлены основные данные:', mainData.length);
-        }
-
-        // Добавляем маркеры алертов
-        addAlertMarkers(mainSeries);
-
-        // Подгоняем график под данные
-        chart.timeScale().fitContent();
-      }
-
-      // Обработчик изменения размера
-      const resizeObserver = new ResizeObserver(entries => {
-        if (entries.length === 0 || entries[0].target !== containerRef.current) {
-          return;
-        }
-        
-        const newRect = entries[0].contentRect;
-        chart.applyOptions({ 
-          width: newRect.width, 
-          height: newRect.height 
-        });
+      // Добавляем серию свечей
+      const candlestickSeries = chart.addCandlestickSeries({
+        upColor: '#26a69a',
+        downColor: '#ef5350',
+        borderVisible: false,
+        wickUpColor: '#26a69a',
+        wickDownColor: '#ef5350',
       });
 
-      if (containerRef.current) {
-        resizeObserver.observe(containerRef.current);
+      candlestickSeriesRef.current = candlestickSeries;
+
+      // Добавляем серию объемов
+      const volumeSeries = chart.addHistogramSeries({
+        color: '#26a69a',
+        priceFormat: {
+          type: 'volume',
+        },
+        priceScaleId: 'volume',
+      });
+
+      volumeSeriesRef.current = volumeSeries;
+
+      // Настраиваем шкалу объемов
+      chart.priceScale('volume').applyOptions({
+        scaleMargins: {
+          top: 0.7,
+          bottom: 0,
+        },
+      });
+
+      // Подготавливаем данные для графика
+      const candleData = chartData.map(item => ({
+        time: Math.floor((item.timestamp || Date.now()) / 1000),
+        open: Number(item.open) || 0,
+        high: Number(item.high) || 0,
+        low: Number(item.low) || 0,
+        close: Number(item.close) || 0,
+      })).filter(item => item.open > 0 && item.high > 0 && item.low > 0 && item.close > 0);
+
+      const volumeData = chartData.map(item => ({
+        time: Math.floor((item.timestamp || Date.now()) / 1000),
+        value: Number(item.volume_usdt || item.volume) || 0,
+        color: item.is_long ? '#26a69a' : '#ef5350',
+      })).filter(item => item.value > 0);
+
+      if (candleData.length > 0) {
+        candlestickSeries.setData(candleData);
+        console.log('✅ Установлены данные свечей:', candleData.length);
       }
+
+      if (volumeData.length > 0) {
+        volumeSeries.setData(volumeData);
+        console.log('✅ Установлены данные объемов:', volumeData.length);
+      }
+
+      // Добавляем маркеры алертов
+      addAlertMarkers(candlestickSeries);
+
+      // Подгоняем график под данные
+      chart.timeScale().fitContent();
+
+      // Улучшенный обработчик изменения размера
+      setupResizeObserver(chart);
 
       setIsLoading(false);
       setError(null);
       setRetryCount(0);
 
-      console.log('Lightweight Chart created successfully with', data.length, 'data points');
+      console.log('✅ Lightweight Chart created successfully with', chartData.length, 'data points');
     } catch (error) {
-      console.error('Ошибка создания Lightweight Chart:', error);
+      console.error('❌ Ошибка создания Lightweight Chart:', error);
       if (mountedRef.current) {
-        // Пробуем Chart.js как fallback
-        setChartLibrary('chartjs');
-        loadChartJsScript().then(() => {
-          createChartJsChart(data);
-        }).catch(() => {
-          setError('Ошибка создания графика');
-          setShowFallbackOptions(true);
-          setIsLoading(false);
-        });
+        setError('Ошибка создания графика');
+        setIsLoading(false);
+        if (onError) {
+          setTimeout(() => onError(), 1000);
+        }
       }
     }
   };
 
-  const createChartJsChart = (data: any[]) => {
-    if (!containerRef.current || !window.Chart || !mountedRef.current) {
-      return;
-    }
+  const setupResizeObserver = (chart: any) => {
+    if (!containerRef.current) return;
 
-    // Очищаем предыдущий график
-    cleanupChart();
+    cleanupResizeObserver();
 
-    try {
-      // Создаем canvas элемент
-      const canvas = document.createElement('canvas');
-      canvas.width = containerRef.current.clientWidth;
-      canvas.height = containerRef.current.clientHeight;
-      containerRef.current.appendChild(canvas);
-
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        throw new Error('Cannot get canvas context');
+    resizeObserverRef.current = new ResizeObserver(entries => {
+      if (entries.length === 0 || entries[0].target !== containerRef.current || !chart) {
+        return;
       }
-
-      // Подготавливаем данные для Chart.js
-      const labels = data.map(item => {
-        const date = new Date(item.timestamp);
-        return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-      });
-
-      const datasets = [];
-
-      // Основной датасет в зависимости от типа графика
-      if (chartType === 'candlestick') {
-        // Для свечного графика используем комбинацию линий
-        datasets.push(
-          {
-            label: 'High',
-            data: data.map(item => item.high),
-            borderColor: 'rgba(76, 175, 80, 0.8)',
-            backgroundColor: 'rgba(76, 175, 80, 0.1)',
-            borderWidth: 1,
-            fill: false,
-            pointRadius: 0,
-            yAxisID: 'y'
-          },
-          {
-            label: 'Low',
-            data: data.map(item => item.low),
-            borderColor: 'rgba(244, 67, 54, 0.8)',
-            backgroundColor: 'rgba(244, 67, 54, 0.1)',
-            borderWidth: 1,
-            fill: false,
-            pointRadius: 0,
-            yAxisID: 'y'
-          },
-          {
-            label: 'Close',
-            data: data.map(item => item.close),
-            borderColor: '#3b82f6',
-            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-            borderWidth: 3,
-            fill: false,
-            tension: 0.1,
-            yAxisID: 'y'
-          }
-        );
-      } else if (chartType === 'line') {
-        datasets.push({
-          label: 'Цена (USD)',
-          data: data.map(item => item.close),
-          borderColor: '#3b82f6',
-          backgroundColor: 'rgba(59, 130, 246, 0.1)',
-          borderWidth: 2,
-          fill: true,
-          tension: 0.1,
-          yAxisID: 'y'
-        });
-      } else { // bar
-        datasets.push({
-          label: 'Цена (USD)',
-          data: data.map(item => item.close),
-          backgroundColor: data.map(item => item.is_long ? 'rgba(76, 175, 80, 0.8)' : 'rgba(244, 67, 54, 0.8)'),
-          borderColor: data.map(item => item.is_long ? 'rgba(76, 175, 80, 1)' : 'rgba(244, 67, 54, 1)'),
-          borderWidth: 1,
-          yAxisID: 'y'
-        });
-      }
-
-      // Добавляем объемы если включены
-      if (showVolume) {
-        datasets.push({
-          label: 'Объем (USD)',
-          data: data.map(item => item.volume_usdt || item.volume),
-          type: 'bar',
-          backgroundColor: 'rgba(16, 185, 129, 0.3)',
-          borderColor: 'rgba(16, 185, 129, 0.8)',
-          borderWidth: 1,
-          yAxisID: 'y1'
-        });
-      }
-
-      // Создаем график
-      chartRef.current = new window.Chart(ctx, {
-        type: chartType === 'bar' ? 'bar' : 'line',
-        data: {
-          labels,
-          datasets
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: {
-            mode: 'index',
-            intersect: false,
-          },
-          plugins: {
-            title: {
-              display: true,
-              text: `${symbol} - ${chartType === 'candlestick' ? 'Свечной' : chartType === 'line' ? 'Линейный' : 'Столбчатый'} график (Chart.js)`,
-              font: {
-                size: 16,
-                weight: 'bold'
-              }
-            },
-            legend: {
-              display: true,
-              position: 'top'
-            },
-            tooltip: {
-              callbacks: {
-                label: function(context) {
-                  if (context.dataset.label?.includes('Объем')) {
-                    return `Объем: $${(context.parsed.y / 1000000).toFixed(2)}M`;
-                  } else {
-                    return `${context.dataset.label}: $${context.parsed.y.toLocaleString()}`;
-                  }
-                }
-              }
-            }
-          },
-          scales: {
-            x: {
-              display: true,
-              title: {
-                display: true,
-                text: 'Время'
-              }
-            },
-            y: {
-              type: 'linear',
-              display: true,
-              position: 'left',
-              title: {
-                display: true,
-                text: 'Цена (USD)'
-              },
-              ticks: {
-                callback: function(value) {
-                  return '$' + Number(value).toLocaleString();
-                }
-              }
-            },
-            ...(showVolume && {
-              y1: {
-                type: 'linear',
-                display: true,
-                position: 'right',
-                title: {
-                  display: true,
-                  text: 'Объем (USD)'
-                },
-                grid: {
-                  drawOnChartArea: false,
-                },
-                ticks: {
-                  callback: function(value) {
-                    return '$' + (Number(value) / 1000000).toFixed(1) + 'M';
-                  }
-                }
-              }
-            })
-          }
+      
+      try {
+        const newRect = entries[0].contentRect;
+        if (newRect.width > 0 && newRect.height > 0) {
+          chart.applyOptions({ 
+            width: newRect.width, 
+            height: newRect.height 
+          });
         }
-      });
-
-      setIsLoading(false);
-      setError(null);
-      setRetryCount(0);
-
-      console.log('Chart.js chart created successfully with', data.length, 'data points');
-    } catch (error) {
-      console.error('Ошибка создания Chart.js:', error);
-      if (mountedRef.current) {
-        setError('Ошибка создания графика');
-        setShowFallbackOptions(true);
-        setIsLoading(false);
+      } catch (error) {
+        console.warn('Ошибка изменения размера графика:', error);
       }
+    });
+
+    resizeObserverRef.current.observe(containerRef.current);
+  };
+
+  const cleanupResizeObserver = () => {
+    if (resizeObserverRef.current) {
+      resizeObserverRef.current.disconnect();
+      resizeObserverRef.current = null;
     }
   };
 
@@ -755,29 +472,26 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       }
     });
 
-    if (markers.length > 0 && series.setMarkers) {
-      series.setMarkers(markers);
-      console.log('Добавлены маркеры алертов:', markers.length);
+    if (markers.length > 0) {
+      try {
+        series.setMarkers(markers);
+        console.log('✅ Добавлены маркеры алертов:', markers.length);
+      } catch (error) {
+        console.warn('⚠️ Ошибка добавления маркеров:', error);
+      }
     }
   };
 
   const cleanupChart = () => {
+    cleanupResizeObserver();
+    
     if (chartRef.current) {
       try {
-        if (chartLibrary === 'lightweight') {
-          chartRef.current.remove();
-        } else if (chartLibrary === 'chartjs') {
-          chartRef.current.destroy();
-        }
+        chartRef.current.remove();
       } catch (e) {
         console.log('Chart cleanup error:', e);
       }
       chartRef.current = null;
-    }
-    
-    // Очищаем контейнер
-    if (containerRef.current) {
-      containerRef.current.innerHTML = '';
     }
     
     candlestickSeriesRef.current = null;
@@ -803,32 +517,30 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     setError(null);
     setIsLoading(true);
     setRetryCount(prev => prev + 1);
-    setShowFallbackOptions(false);
+    setChartReady(false);
     
     // Сбрасываем глобальное состояние
     lightweightChartsLoaded = false;
     lightweightChartsPromise = null;
-    chartJsLoaded = false;
-    chartJsPromise = null;
 
     // Удаляем существующие скрипты
-    const existingScripts = document.querySelectorAll('script[src*="lightweight-charts"], script[src*="chart.js"], script[src*="chart.umd"]');
+    const existingScripts = document.querySelectorAll('script[src*="lightweight-charts"]');
     existingScripts.forEach(script => script.remove());
 
-    // Очищаем библиотеки из window
+    // Очищаем LightweightCharts из window
     if (window.LightweightCharts) {
       delete window.LightweightCharts;
     }
-    if (window.Chart) {
-      delete window.Chart;
-    }
+
+    // Очищаем график
+    cleanupChart();
 
     // Перезагружаем через небольшую задержку
     setTimeout(() => {
       if (mountedRef.current) {
         initializeChart();
       }
-    }, 500);
+    }, 1000);
   };
 
   const openPaperTrading = (direction: 'LONG' | 'SHORT') => {
@@ -848,12 +560,6 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     { value: '1h', label: '1ч' },
     { value: '4h', label: '4ч' },
     { value: '1d', label: '1д' }
-  ];
-
-  const chartTypes = [
-    { value: 'candlestick', label: 'Свечи', icon: BarChart3 },
-    { value: 'line', label: 'Линия', icon: Activity },
-    { value: 'bar', label: 'Столбцы', icon: BarChart2 }
   ];
 
   return (
@@ -884,13 +590,8 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                   Demo данные
                 </span>
               )}
-              <span className={`text-sm px-2 py-1 rounded ${
-                chartLibrary === 'lightweight' ? 'text-green-600 bg-green-100' :
-                chartLibrary === 'chartjs' ? 'text-blue-600 bg-blue-100' :
-                'text-red-600 bg-red-100'
-              }`}>
-                {chartLibrary === 'lightweight' ? 'Lightweight Charts' :
-                 chartLibrary === 'chartjs' ? 'Chart.js' : 'Fallback'}
+              <span className="text-sm text-green-600 bg-green-100 px-2 py-1 rounded">
+                Lightweight Charts
               </span>
               {error && (
                 <span className="text-sm text-red-600 bg-red-100 px-2 py-1 rounded flex items-center">
@@ -937,44 +638,6 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                   <span>SHORT</span>
                 </button>
               </div>
-
-              {/* Тип графика (только для Chart.js) */}
-              {chartLibrary === 'chartjs' && (
-                <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
-                  {chartTypes.map((type) => {
-                    const Icon = type.icon;
-                    return (
-                      <button
-                        key={type.value}
-                        onClick={() => setChartType(type.value as any)}
-                        className={`flex items-center space-x-1 px-2 py-1 text-xs rounded transition-colors ${
-                          chartType === type.value
-                            ? 'bg-purple-600 text-white'
-                            : 'text-gray-600 hover:bg-gray-200'
-                        }`}
-                        title={type.label}
-                      >
-                        <Icon className="w-3 h-3" />
-                        <span className="hidden sm:inline">{type.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Переключатель объемов (только для Chart.js) */}
-              {chartLibrary === 'chartjs' && (
-                <button
-                  onClick={() => setShowVolume(!showVolume)}
-                  className={`px-2 py-1 text-xs rounded transition-colors ${
-                    showVolume
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                  }`}
-                >
-                  Объемы
-                </button>
-              )}
 
               {/* Интервалы */}
               <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
@@ -1025,9 +688,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
                   <p className="text-gray-600">
-                    {chartLibrary === 'lightweight' && !lightweightChartsLoaded ? 'Загрузка Lightweight Charts...' :
-                     chartLibrary === 'chartjs' && !chartJsLoaded ? 'Загрузка Chart.js...' :
-                     'Загрузка данных графика...'}
+                    {!lightweightChartsLoaded ? 'Загрузка Lightweight Charts...' : 'Загрузка данных графика...'}
                   </p>
                   <p className="text-xs text-gray-500 mt-2">
                     Попытка {retryCount + 1} • {dataSource === 'mock' ? 'Используются demo данные' : 'Загрузка с API'}
@@ -1045,9 +706,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                     <div className="space-x-2">
                       <button
                         onClick={retryLoad}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+                        className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
                       >
-                        Попробовать снова ({retryCount + 1})
+                        <RefreshCw className="w-4 h-4" />
+                        <span>Попробовать снова ({retryCount + 1})</span>
                       </button>
                       <button
                         onClick={openInTradingView}
@@ -1056,37 +718,19 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                         Открыть в TradingView
                       </button>
                     </div>
-                    {showFallbackOptions && (
-                      <div className="mt-4 space-y-2">
-                        <p className="text-sm text-gray-600">Альтернативные варианты:</p>
-                        <div className="space-x-2">
-                          <button
-                            onClick={() => {
-                              onClose();
-                              // Здесь можно открыть CoinGecko
-                            }}
-                            className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded text-sm transition-colors"
-                          >
-                            <Globe className="w-4 h-4 inline mr-1" />
-                            CoinGecko
-                          </button>
-                          <button
-                            onClick={() => {
-                              onClose();
-                              // Здесь можно открыть внутренний график
-                            }}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded text-sm transition-colors"
-                          >
-                            <BarChart3 className="w-4 h-4 inline mr-1" />
-                            Внутренний
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    <p className="text-xs text-gray-500">
-                      Библиотека: {chartLibrary} • 
+                    <p className="text-xs text-gray-500 mt-4">
+                      Библиотека загружена: {lightweightChartsLoaded ? 'Да' : 'Нет'} • 
                       Источник данных: {dataSource}
                     </p>
+                    <div className="mt-4 p-3 bg-blue-50 rounded-lg text-left">
+                      <p className="text-sm text-blue-800 font-medium mb-2">💡 Возможные решения:</p>
+                      <ul className="text-xs text-blue-700 space-y-1">
+                        <li>• Проверьте интернет-соединение</li>
+                        <li>• Отключите блокировщики рекламы</li>
+                        <li>• Попробуйте обновить страницу</li>
+                        <li>• Используйте альтернативные графики</li>
+                      </ul>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1104,8 +748,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
             <div className="flex justify-between items-center text-sm text-gray-600">
               <span>
                 Данные: {dataSource === 'api' ? 'API Backend' : 'Demo данные'} • 
-                График: {chartLibrary === 'lightweight' ? 'Lightweight Charts' :
-                         chartLibrary === 'chartjs' ? `Chart.js (${chartType === 'candlestick' ? 'Свечи' : chartType === 'line' ? 'Линия' : 'Столбцы'})` : 'Fallback'}
+                Powered by Lightweight Charts
               </span>
               <div className="flex items-center space-x-4">
                 <span>📈 LONG: прибыль при росте</span>
