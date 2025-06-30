@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, ExternalLink, Settings, Maximize2, Minimize2, Target, Zap, AlertTriangle } from 'lucide-react';
+import { X, ExternalLink, Settings, Maximize2, Minimize2, Target, Zap, AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface TradingViewChartProps {
   symbol: string;
@@ -88,16 +88,25 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   }, [alerts, showSignals, chartRef.current]);
 
   const loadTradingViewScript = () => {
+    // Проверяем, доступен ли TradingView
     if (window.TradingView) {
       setScriptLoaded(true);
+      setError(null);
       return;
     }
 
     // Проверяем, не загружается ли уже скрипт
-    const existingScript = document.querySelector('script[src*="charting_library"]') ||
+    const existingScript = document.querySelector('script[src*="tradingview"]') ||
                           document.querySelector('script[src*="tv.js"]');
     if (existingScript) {
-      existingScript.addEventListener('load', () => setScriptLoaded(true));
+      existingScript.addEventListener('load', () => {
+        if (window.TradingView) {
+          setScriptLoaded(true);
+          setError(null);
+        } else {
+          handleScriptError();
+        }
+      });
       existingScript.addEventListener('error', handleScriptError);
       return;
     }
@@ -108,44 +117,40 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     script.async = true;
     script.onload = () => {
       console.log('TradingView script loaded successfully');
-      setScriptLoaded(true);
-      setError(null);
-      setRetryCount(0);
+      if (window.TradingView) {
+        setScriptLoaded(true);
+        setError(null);
+        setRetryCount(0);
+      } else {
+        console.log('TradingView object not available, trying alternative...');
+        loadAlternativeScript();
+      }
     };
     script.onerror = () => {
       console.log('Primary script failed, trying alternative...');
-      // Пробуем альтернативный URL
       loadAlternativeScript();
     };
     document.head.appendChild(script);
   };
 
   const loadAlternativeScript = () => {
+    // Удаляем предыдущий скрипт
+    const existingScripts = document.querySelectorAll('script[src*="tradingview"], script[src*="tv.js"]');
+    existingScripts.forEach(script => script.remove());
+
     const script = document.createElement('script');
     script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
     script.async = true;
     script.onload = () => {
       console.log('Alternative TradingView script loaded');
-      // Создаем простую заглушку для TradingView API
+      // Создаем простую заглушку для TradingView API если его нет
       if (!window.TradingView) {
-        window.TradingView = {
-          widget: function(config: any) {
-            console.log('Creating TradingView widget with config:', config);
-            return {
-              onChartReady: (callback: Function) => {
-                setTimeout(callback, 1000);
-              },
-              chart: () => ({
-                createShape: () => null,
-                remove: () => null
-              }),
-              remove: () => null
-            };
-          }
-        };
+        console.log('Creating TradingView fallback');
+        createFallbackChart();
+      } else {
+        setScriptLoaded(true);
+        setError(null);
       }
-      setScriptLoaded(true);
-      setError(null);
     };
     script.onerror = handleScriptError;
     document.head.appendChild(script);
@@ -153,9 +158,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
   const handleScriptError = () => {
     console.error('Ошибка загрузки TradingView скрипта');
-    setError('Ошибка загрузки TradingView. Проверьте подключение к интернету.');
+    setError('TradingView временно недоступен');
     setIsLoading(false);
     setRetryCount(prev => prev + 1);
+    createFallbackChart();
   };
 
   const createWidget = () => {
@@ -173,7 +179,8 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     const tvSymbol = `BYBIT:${symbol.replace('USDT', '')}USDT.P`;
     const containerId = `tradingview_${symbol}_${Date.now()}`;
 
-    // Устанавливаем ID контейнера
+    // Очищаем контейнер
+    containerRef.current.innerHTML = '';
     containerRef.current.id = containerId;
 
     try {
@@ -245,6 +252,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           console.error('Ошибка инициализации графика:', error);
           setError('Ошибка инициализации графика TradingView');
           setIsLoading(false);
+          createFallbackChart();
         }
       });
 
@@ -257,6 +265,9 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const createFallbackChart = () => {
     if (!containerRef.current) return;
 
+    setIsLoading(false);
+    setError('TradingView недоступен');
+
     containerRef.current.innerHTML = `
       <div style="
         width: 100%;
@@ -265,41 +276,99 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        background: #f8f9fa;
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
         border: 2px dashed #dee2e6;
-        border-radius: 8px;
+        border-radius: 12px;
+        padding: 40px;
+        text-align: center;
       ">
-        <div style="text-align: center; padding: 20px;">
-          <h3 style="color: #495057; margin-bottom: 16px;">График недоступен</h3>
-          <p style="color: #6c757d; margin-bottom: 20px;">
+        <div style="
+          background: white;
+          padding: 30px;
+          border-radius: 12px;
+          box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+          max-width: 500px;
+        ">
+          <div style="
+            width: 64px;
+            height: 64px;
+            background: #ffc107;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 24px;
+          ">📊</div>
+          
+          <h3 style="color: #495057; margin-bottom: 16px; font-size: 24px;">График TradingView</h3>
+          <p style="color: #6c757d; margin-bottom: 20px; line-height: 1.5;">
             TradingView временно недоступен.<br>
             Используйте внешнюю ссылку для просмотра графика.
           </p>
-          <div style="margin-bottom: 16px;">
-            <strong style="color: #495057;">Символ:</strong> ${symbol}<br>
-            ${alertPrice ? `<strong style="color: #495057;">Цена алерта:</strong> $${alertPrice.toFixed(6)}<br>` : ''}
-            <strong style="color: #495057;">Сигналов:</strong> ${alerts.length}
+          
+          <div style="
+            background: #f8f9fa;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #007bff;
+          ">
+            <div style="margin-bottom: 8px;">
+              <strong style="color: #495057;">Символ:</strong> ${symbol}
+            </div>
+            ${alertPrice ? `
+              <div style="margin-bottom: 8px;">
+                <strong style="color: #495057;">Цена алерта:</strong> 
+                <span style="color: #ffc107; font-weight: bold;">$${alertPrice.toFixed(6)}</span>
+              </div>
+            ` : ''}
+            <div>
+              <strong style="color: #495057;">Сигналов программы:</strong> 
+              <span style="color: #28a745; font-weight: bold;">${alerts.length}</span>
+            </div>
           </div>
+          
           <button
             onclick="window.open('${getTradingViewUrl()}', '_blank')"
             style="
-              background: #007bff;
+              background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
               color: white;
               border: none;
-              padding: 10px 20px;
-              border-radius: 4px;
+              padding: 12px 24px;
+              border-radius: 8px;
               cursor: pointer;
-              font-size: 14px;
+              font-size: 16px;
+              font-weight: 500;
+              transition: transform 0.2s;
+              box-shadow: 0 2px 4px rgba(0, 123, 255, 0.3);
             "
+            onmouseover="this.style.transform='translateY(-2px)'"
+            onmouseout="this.style.transform='translateY(0)'"
           >
-            Открыть в TradingView
+            🚀 Открыть в TradingView
           </button>
+          
+          ${retryCount < 3 ? `
+            <button
+              onclick="window.location.reload()"
+              style="
+                background: #28a745;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 14px;
+                margin-left: 10px;
+              "
+            >
+              🔄 Попробовать снова
+            </button>
+          ` : ''}
         </div>
       </div>
     `;
-
-    setIsLoading(false);
-    setError('TradingView недоступен - используется резервный режим');
   };
 
   const getTradingViewUrl = () => {
@@ -586,8 +655,15 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     const existingScripts = document.querySelectorAll('script[src*="tradingview"], script[src*="tv.js"]');
     existingScripts.forEach(script => script.remove());
 
+    // Очищаем TradingView объект
+    if (window.TradingView) {
+      delete window.TradingView;
+    }
+
     // Перезагружаем скрипт
-    loadTradingViewScript();
+    setTimeout(() => {
+      loadTradingViewScript();
+    }, 1000);
   };
 
   const intervals = [
@@ -652,6 +728,18 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 {showSignals ? 'Скрыть сигналы' : 'Показать сигналы'}
               </span>
             </button>
+
+            {/* Кнопка перезагрузки */}
+            {error && (
+              <button
+                onClick={retryLoad}
+                className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg transition-colors"
+                title="Перезагрузить график"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span className="text-sm">Обновить</span>
+              </button>
+            )}
 
             {/* Интервалы */}
             <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
@@ -722,29 +810,6 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 {!scriptLoaded && (
                   <p className="text-sm text-gray-500 mt-2">Загрузка скрипта TradingView...</p>
                 )}
-              </div>
-            </div>
-          )}
-
-          {error && !isLoading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-white z-10">
-              <div className="text-center">
-                <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-4" />
-                <p className="text-orange-600 mb-4">{error}</p>
-                {retryCount < 3 && (
-                  <button
-                    onClick={retryLoad}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors mr-2"
-                  >
-                    Попробовать снова ({retryCount + 1}/3)
-                  </button>
-                )}
-                <button
-                  onClick={openInTradingView}
-                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
-                >
-                  Открыть в TradingView
-                </button>
               </div>
             </div>
           )}

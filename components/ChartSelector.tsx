@@ -88,6 +88,7 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
     }
   };
 
+  // Исправляем условия рендеринга компонентов
   if (selectedChart === 'tradingview') {
     return (
       <TradingViewChart
@@ -95,7 +96,7 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
         alertPrice={alert.price}
         alertTime={alert.close_timestamp || alert.timestamp}
         alerts={relatedAlerts}
-        onClose={onClose}
+        onClose={() => setSelectedChart(null)} // Возвращаемся к селектору
       />
     );
   }
@@ -104,7 +105,7 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
     return (
       <CoinGeckoChart
         symbol={alert.symbol}
-        onClose={onClose}
+        onClose={() => setSelectedChart(null)} // Возвращаемся к селектору
       />
     );
   }
@@ -113,7 +114,7 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
     return (
       <ChartModal
         alert={alert}
-        onClose={onClose}
+        onClose={() => setSelectedChart(null)} // Возвращаемся к селектору
       />
     );
   }
@@ -124,7 +125,7 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
         symbol={alert.symbol}
         alertPrice={alert.price}
         alertId={alert.id}
-        onClose={onClose}
+        onClose={() => setSelectedChart(null)} // Возвращаемся к селектору
       />
     );
   }
