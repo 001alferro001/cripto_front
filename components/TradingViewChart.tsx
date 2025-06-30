@@ -17,10 +17,6 @@ declare global {
   }
 }
 
-// Глобальный кэш для TradingView скрипта
-let tradingViewScriptLoaded = false;
-let tradingViewScriptPromise: Promise<void> | null = null;
-
 const TradingViewChart: React.FC<TradingViewChartProps> = ({ 
   symbol, 
   alertPrice, 
@@ -39,82 +35,82 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const [showPaperTrading, setShowPaperTrading] = useState(false);
   const [showRealTrading, setShowRealTrading] = useState(false);
   const [tradingDirection, setTradingDirection] = useState<'LONG' | 'SHORT'>('LONG');
+  const [scriptLoaded, setScriptLoaded] = useState(false);
+  const [widgetId, setWidgetId] = useState(0);
 
+  // Проверяем загружен ли уже скрипт TradingView
   useEffect(() => {
-    loadTradingViewScript();
+    if (window.TradingView) {
+      setScriptLoaded(true);
+      setIsLoading(false);
+    } else {
+      loadTradingViewScript();
+    }
     
     return () => {
-      if (widgetRef.current) {
-        try {
-          widgetRef.current.remove();
-        } catch (e) {
-          console.log('Widget cleanup error:', e);
-        }
-      }
+      cleanupWidget();
     };
   }, []);
 
+  // Создаем виджет при изменении параметров
   useEffect(() => {
-    if (window.TradingView && containerRef.current) {
+    if (scriptLoaded && containerRef.current) {
       createWidget();
     }
-  }, [symbol, interval, chartType, theme]);
+  }, [scriptLoaded, symbol, interval, chartType, theme, widgetId]);
 
-  const loadTradingViewScript = async (): Promise<void> => {
-    if (window.TradingView) {
-      createWidget();
-      return Promise.resolve();
+  const cleanupWidget = () => {
+    if (widgetRef.current) {
+      try {
+        if (typeof widgetRef.current.remove === 'function') {
+          widgetRef.current.remove();
+        }
+        widgetRef.current = null;
+      } catch (e) {
+        console.log('Widget cleanup error:', e);
+      }
     }
-
-    if (tradingViewScriptLoaded) {
-      createWidget();
-      return Promise.resolve();
+    
+    // Очищаем контейнер
+    if (containerRef.current) {
+      containerRef.current.innerHTML = '';
     }
+  };
 
-    if (tradingViewScriptPromise) {
-      return tradingViewScriptPromise;
-    }
-
+  const loadTradingViewScript = () => {
     // Проверяем, не загружается ли уже скрипт
-    const existingScript = document.querySelector('script[src*="tradingview"], script[src*="tv.js"]');
+    const existingScript = document.querySelector('script[src*="tv.js"]');
     if (existingScript) {
-      tradingViewScriptPromise = new Promise((resolve, reject) => {
-        existingScript.addEventListener('load', () => {
-          if (window.TradingView) {
-            tradingViewScriptLoaded = true;
-            createWidget();
-            resolve();
-          }
-        });
-        existingScript.addEventListener('error', () => {
-          handleScriptError();
-          reject(new Error('Script loading failed'));
-        });
+      // Если скрипт уже есть, ждем его загрузки
+      if (window.TradingView) {
+        setScriptLoaded(true);
+        setIsLoading(false);
+        return;
+      }
+      
+      existingScript.addEventListener('load', () => {
+        if (window.TradingView) {
+          setScriptLoaded(true);
+          setIsLoading(false);
+        }
       });
-      return tradingViewScriptPromise;
+      
+      existingScript.addEventListener('error', handleScriptError);
+      return;
     }
 
-    tradingViewScriptPromise = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://s3.tradingview.com/tv.js';
-      script.async = true;
-      script.onload = () => {
-        console.log('TradingView script loaded successfully');
-        tradingViewScriptLoaded = true;
-        createWidget();
-        setError(null);
-        setRetryCount(0);
-        resolve();
-      };
-      script.onerror = () => {
-        handleScriptError();
-        tradingViewScriptPromise = null;
-        reject(new Error('Script loading failed'));
-      };
-      document.head.appendChild(script);
-    });
-
-    return tradingViewScriptPromise;
+    const script = document.createElement('script');
+    script.src = 'https://s3.tradingview.com/tv.js';
+    script.async = true;
+    script.onload = () => {
+      console.log('TradingView script loaded successfully');
+      setScriptLoaded(true);
+      setIsLoading(false);
+      setError(null);
+      setRetryCount(0);
+    };
+    script.onerror = handleScriptError;
+    document.head.appendChild(script);
   };
 
   const handleScriptError = () => {
@@ -125,29 +121,30 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   };
 
   const createWidget = () => {
-    if (!containerRef.current || !window.TradingView) {
-      console.error('Container or TradingView not available');
+    if (!containerRef.current || !window.TradingView || !scriptLoaded) {
+      console.error('Container, TradingView or script not available');
       return;
     }
 
     // Очищаем предыдущий виджет
-    if (widgetRef.current) {
-      try {
-        widgetRef.current.remove();
-      } catch (e) {
-        console.log('Error removing previous widget:', e);
-      }
-    }
+    cleanupWidget();
 
     const tvSymbol = `BYBIT:${symbol.replace('USDT', '')}USDT.P`;
-    const containerId = `tradingview_${symbol}_${Date.now()}`;
+    const containerId = `tradingview_${symbol}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    containerRef.current.id = containerId;
+    // Создаем новый контейнер
+    const widgetContainer = document.createElement('div');
+    widgetContainer.id = containerId;
+    widgetContainer.style.width = '100%';
+    widgetContainer.style.height = '100%';
+    
+    containerRef.current.appendChild(widgetContainer);
 
     try {
       console.log('Creating TradingView widget for:', tvSymbol);
+      setIsLoading(true);
 
-      widgetRef.current = new window.TradingView.widget({
+      const widgetConfig = {
         autosize: true,
         symbol: tvSymbol,
         interval: interval,
@@ -187,15 +184,19 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           backgroundColor: theme === 'dark' ? '#1e1e1e' : '#ffffff',
           foregroundColor: theme === 'dark' ? '#ffffff' : '#000000'
         }
-      });
+      };
+
+      widgetRef.current = new window.TradingView.widget(widgetConfig);
 
       widgetRef.current.onChartReady(() => {
         try {
           console.log('TradingView chart ready');
-          const chart = widgetRef.current.chart();
+          
+          // Добавляем линии алерта
+          if (alertPrice && widgetRef.current) {
+            const chart = widgetRef.current.chart();
 
-          // Добавляем линию алерта
-          if (alertPrice) {
+            // Горизонтальная линия алерта
             chart.createShape(
               { time: Date.now() / 1000, price: alertPrice },
               {
@@ -273,17 +274,21 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     setError(null);
     setIsLoading(true);
     setRetryCount(0);
-
-    // Сбрасываем кэш
-    tradingViewScriptLoaded = false;
-    tradingViewScriptPromise = null;
+    setScriptLoaded(false);
 
     // Удаляем существующие скрипты
-    const existingScripts = document.querySelectorAll('script[src*="tradingview"], script[src*="tv.js"]');
+    const existingScripts = document.querySelectorAll('script[src*="tv.js"]');
     existingScripts.forEach(script => script.remove());
 
+    // Очищаем TradingView из window
+    if (window.TradingView) {
+      delete window.TradingView;
+    }
+
     // Перезагружаем скрипт
-    loadTradingViewScript();
+    setTimeout(() => {
+      loadTradingViewScript();
+    }, 100);
   };
 
   const openPaperTrading = (direction: 'LONG' | 'SHORT') => {
@@ -294,6 +299,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const openRealTrading = (direction: 'LONG' | 'SHORT') => {
     setTradingDirection(direction);
     setShowRealTrading(true);
+  };
+
+  const forceRecreateWidget = () => {
+    setWidgetId(prev => prev + 1);
   };
 
   const intervals = [
@@ -440,7 +449,9 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
               <div className="absolute inset-0 flex items-center justify-center bg-white z-10">
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-                  <p className="text-gray-600">Загрузка графика TradingView...</p>
+                  <p className="text-gray-600">
+                    {!scriptLoaded ? 'Загрузка TradingView...' : 'Создание графика...'}
+                  </p>
                 </div>
               </div>
             )}
@@ -450,20 +461,28 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 <div className="text-center">
                   <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-4" />
                   <p className="text-orange-600 mb-4">{error}</p>
-                  {retryCount < 3 && (
+                  <div className="space-x-2">
+                    {retryCount < 3 && (
+                      <button
+                        onClick={retryLoad}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+                      >
+                        Попробовать снова ({retryCount + 1}/3)
+                      </button>
+                    )}
                     <button
-                      onClick={retryLoad}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors mr-2"
+                      onClick={forceRecreateWidget}
+                      className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors"
                     >
-                      Попробовать снова ({retryCount + 1}/3)
+                      Пересоздать график
                     </button>
-                  )}
-                  <button
-                    onClick={openInTradingView}
-                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
-                  >
-                    Открыть в TradingView
-                  </button>
+                    <button
+                      onClick={openInTradingView}
+                      className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
+                    >
+                      Открыть в TradingView
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -494,6 +513,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           symbol={symbol}
           alertPrice={alertPrice || 0}
           alertId={0}
+          direction={tradingDirection}
           onClose={() => setShowPaperTrading(false)}
         />
       )}
@@ -503,6 +523,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           symbol={symbol}
           alertPrice={alertPrice || 0}
           alertId={0}
+          direction={tradingDirection}
           onClose={() => setShowRealTrading(false)}
         />
       )}

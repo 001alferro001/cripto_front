@@ -5,6 +5,7 @@ interface RealTradingModalProps {
   symbol: string;
   alertPrice: number;
   alertId: number;
+  direction?: 'LONG' | 'SHORT';
   onClose: () => void;
 }
 
@@ -42,11 +43,12 @@ const RealTradingModal: React.FC<RealTradingModalProps> = ({
   symbol,
   alertPrice,
   alertId,
+  direction: initialDirection = 'LONG',
   onClose
 }) => {
   // Состояния для калькулятора
   const [calculationMode, setCalculationMode] = useState<'risk_percentage' | 'fixed_amount' | 'fixed_stoploss'>('risk_percentage');
-  const [direction, setDirection] = useState<'LONG' | 'SHORT'>('LONG');
+  const [direction, setDirection] = useState<'LONG' | 'SHORT'>(initialDirection);
   const [entryPrice, setEntryPrice] = useState(alertPrice);
   const [stopLoss, setStopLoss] = useState(0);
   const [takeProfit, setTakeProfit] = useState(0);

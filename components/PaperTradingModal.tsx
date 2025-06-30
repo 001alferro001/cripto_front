@@ -5,6 +5,7 @@ interface PaperTradingModalProps {
   symbol: string;
   alertPrice: number;
   alertId: number;
+  direction?: 'LONG' | 'SHORT';
   onClose: () => void;
 }
 
@@ -34,11 +35,12 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
   symbol,
   alertPrice,
   alertId,
+  direction: initialDirection = 'LONG',
   onClose
 }) => {
   // Состояния для калькулятора
   const [calculationMode, setCalculationMode] = useState<'risk_percentage' | 'fixed_amount' | 'fixed_stoploss'>('risk_percentage');
-  const [direction, setDirection] = useState<'LONG' | 'SHORT'>('LONG');
+  const [direction, setDirection] = useState<'LONG' | 'SHORT'>(initialDirection);
   const [entryPrice, setEntryPrice] = useState(alertPrice);
   const [stopLoss, setStopLoss] = useState(0);
   const [takeProfit, setTakeProfit] = useState(0);
@@ -256,7 +258,7 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
       });
 
       if (response.ok) {
-        alert('Бумажная сделка сохранена!');
+        alert(`${calculation.direction} бумажная сделка сохранена!`);
         onClose();
       } else {
         const error = await response.json();
