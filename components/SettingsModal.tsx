@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, Save, RefreshCw, DollarSign, Settings as SettingsIcon, Shield, AlertTriangle } from 'lucide-react';
 
 interface Settings {
@@ -55,76 +55,123 @@ interface SettingsModalProps {
   onSave: (settings: Settings) => void;
 }
 
+// Дефолтные настройки для быстрой загрузки
+const DEFAULT_SETTINGS: Settings = {
+  volume_analyzer: {
+    analysis_hours: 1,
+    offset_minutes: 0,
+    volume_multiplier: 2.0,
+    min_volume_usdt: 1000,
+    consecutive_long_count: 5,
+    alert_grouping_minutes: 5,
+    data_retention_hours: 2,
+    update_interval_seconds: 1,
+    notification_enabled: true,
+    volume_type: 'long'
+  },
+  alerts: {
+    volume_alerts_enabled: true,
+    consecutive_alerts_enabled: true,
+    priority_alerts_enabled: true
+  },
+  imbalance: {
+    fair_value_gap_enabled: true,
+    order_block_enabled: true,
+    breaker_block_enabled: true,
+    min_gap_percentage: 0.1,
+    min_strength: 0.5
+  },
+  orderbook: {
+    enabled: false,
+    snapshot_on_alert: false
+  },
+  telegram: {
+    enabled: false
+  },
+  trading: {
+    account_balance: 10000,
+    max_risk_per_trade: 2,
+    max_open_trades: 5,
+    default_stop_loss_percentage: 2,
+    default_take_profit_percentage: 6,
+    auto_calculate_quantity: true,
+    enable_real_trading: false,
+    default_leverage: 1,
+    default_margin_type: 'isolated',
+    confirm_trades: true
+  }
+};
+
 const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onClose, onSave }) => {
-  const [localSettings, setLocalSettings] = useState<Settings | null>(null);
+  // Используем дефолтные настройки сразу для быстрой загрузки
+  const [localSettings, setLocalSettings] = useState<Settings>(
+    settings ? { ...DEFAULT_SETTINGS, ...settings } : DEFAULT_SETTINGS
+  );
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'volume' | 'alerts' | 'imbalance' | 'orderbook' | 'trading'>('volume');
   const [showApiSecret, setShowApiSecret] = useState(false);
   const [testApiStatus, setTestApiStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [testApiMessage, setTestApiMessage] = useState('');
 
+  // Мемоизированные обновления для оптимизации
+  const updateVolumeSettings = useMemo(() => (key: string, value: any) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      volume_analyzer: {
+        ...prev.volume_analyzer,
+        [key]: value
+      }
+    }));
+  }, []);
+
+  const updateAlertSettings = useMemo(() => (key: string, value: any) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      alerts: {
+        ...prev.alerts,
+        [key]: value
+      }
+    }));
+  }, []);
+
+  const updateImbalanceSettings = useMemo(() => (key: string, value: any) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      imbalance: {
+        ...prev.imbalance,
+        [key]: value
+      }
+    }));
+  }, []);
+
+  const updateOrderbookSettings = useMemo(() => (key: string, value: any) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      orderbook: {
+        ...prev.orderbook,
+        [key]: value
+      }
+    }));
+  }, []);
+
+  const updateTradingSettings = useMemo(() => (key: string, value: any) => {
+    setLocalSettings(prev => ({
+      ...prev,
+      trading: {
+        ...prev.trading,
+        [key]: value
+      }
+    }));
+  }, []);
+
+  // Обновляем настройки при изменении props
   useEffect(() => {
     if (settings) {
-      // Создаем полную копию настроек с дефолтными значениями
-      const defaultSettings: Settings = {
-        volume_analyzer: {
-          analysis_hours: 1,
-          offset_minutes: 0,
-          volume_multiplier: 2.0,
-          min_volume_usdt: 1000,
-          consecutive_long_count: 5,
-          alert_grouping_minutes: 5,
-          data_retention_hours: 2,
-          update_interval_seconds: 1,
-          notification_enabled: true,
-          volume_type: 'long',
-          ...settings.volume_analyzer
-        },
-        alerts: {
-          volume_alerts_enabled: true,
-          consecutive_alerts_enabled: true,
-          priority_alerts_enabled: true,
-          ...settings.alerts
-        },
-        imbalance: {
-          fair_value_gap_enabled: true,
-          order_block_enabled: true,
-          breaker_block_enabled: true,
-          min_gap_percentage: 0.1,
-          min_strength: 0.5,
-          ...settings.imbalance
-        },
-        orderbook: {
-          enabled: false,
-          snapshot_on_alert: false,
-          ...settings.orderbook
-        },
-        telegram: {
-          enabled: false,
-          ...settings.telegram
-        },
-        trading: {
-          account_balance: 10000,
-          max_risk_per_trade: 2,
-          max_open_trades: 5,
-          default_stop_loss_percentage: 2,
-          default_take_profit_percentage: 6,
-          auto_calculate_quantity: true,
-          enable_real_trading: false,
-          default_leverage: 1,
-          default_margin_type: 'isolated',
-          confirm_trades: true,
-          ...settings.trading
-        }
-      };
-      
-      setLocalSettings(defaultSettings);
+      setLocalSettings({ ...DEFAULT_SETTINGS, ...settings });
     }
   }, [settings]);
 
   const handleSave = async () => {
-    if (!localSettings) return;
-
     setLoading(true);
     try {
       const response = await fetch('/api/settings', {
@@ -147,61 +194,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onClose, onSave
     } finally {
       setLoading(false);
     }
-  };
-
-  const updateVolumeSettings = (key: string, value: any) => {
-    if (!localSettings) return;
-    setLocalSettings({
-      ...localSettings,
-      volume_analyzer: {
-        ...localSettings.volume_analyzer,
-        [key]: value
-      }
-    });
-  };
-
-  const updateAlertSettings = (key: string, value: any) => {
-    if (!localSettings) return;
-    setLocalSettings({
-      ...localSettings,
-      alerts: {
-        ...localSettings.alerts,
-        [key]: value
-      }
-    });
-  };
-
-  const updateImbalanceSettings = (key: string, value: any) => {
-    if (!localSettings) return;
-    setLocalSettings({
-      ...localSettings,
-      imbalance: {
-        ...localSettings.imbalance,
-        [key]: value
-      }
-    });
-  };
-
-  const updateOrderbookSettings = (key: string, value: any) => {
-    if (!localSettings) return;
-    setLocalSettings({
-      ...localSettings,
-      orderbook: {
-        ...localSettings.orderbook,
-        [key]: value
-      }
-    });
-  };
-
-  const updateTradingSettings = (key: string, value: any) => {
-    if (!localSettings) return;
-    setLocalSettings({
-      ...localSettings,
-      trading: {
-        ...localSettings.trading,
-        [key]: value
-      }
-    });
   };
 
   const testApiConnection = async () => {
@@ -241,19 +233,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onClose, onSave
       setTestApiMessage('Ошибка соединения с сервером');
     }
   };
-
-  if (!localSettings) {
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-        <div className="bg-white rounded-lg p-8">
-          <div className="flex items-center justify-center">
-            <RefreshCw className="w-6 h-6 animate-spin text-blue-600 mr-2" />
-            <span className="text-gray-700">Загрузка настроек...</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">

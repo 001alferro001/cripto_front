@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, Calculator, TrendingUp, TrendingDown, DollarSign, Percent, Target, AlertTriangle, Save, BarChart3, Shield, Zap } from 'lucide-react';
 
 interface RealTradingModalProps {
@@ -39,6 +39,18 @@ interface TradingSettings {
   confirm_trades?: boolean;
 }
 
+// Дефолтные настройки для быстрой загрузки
+const DEFAULT_SETTINGS: TradingSettings = {
+  account_balance: 10000,
+  max_risk_per_trade: 2,
+  default_stop_loss_percentage: 2,
+  default_take_profit_percentage: 6,
+  enable_real_trading: false,
+  default_leverage: 1,
+  default_margin_type: 'isolated',
+  confirm_trades: true
+};
+
 const RealTradingModal: React.FC<RealTradingModalProps> = ({
   symbol,
   alertPrice,
@@ -59,9 +71,9 @@ const RealTradingModal: React.FC<RealTradingModalProps> = ({
   const [leverage, setLeverage] = useState(1);
   const [marginType, setMarginType] = useState<'isolated' | 'cross'>('isolated');
   
-  // Состояния для настроек
-  const [settings, setSettings] = useState<TradingSettings | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Состояния для настроек - используем дефолтные значения сразу
+  const [settings, setSettings] = useState<TradingSettings>(DEFAULT_SETTINGS);
+  const [loading, setLoading] = useState(false); // Убираем начальную загрузку
   const [saving, setSaving] = useState(false);
   const [apiConnected, setApiConnected] = useState(false);
   const [testingApi, setTestingApi] = useState(false);
@@ -70,33 +82,68 @@ const RealTradingModal: React.FC<RealTradingModalProps> = ({
   const [calculation, setCalculation] = useState<TradeCalculation | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
 
+  // Загружаем настройки асинхронно в фоне
   useEffect(() => {
-    loadSettings();
+    loadSettingsAsync();
   }, []);
 
+  // Инициализируем значения сразу с дефолтными настройками
   useEffect(() => {
-    if (settings) {
-      setAccountBalance(settings.account_balance);
-      setRiskPercentage(settings.max_risk_per_trade);
-      setLeverage(settings.default_leverage || 1);
-      setMarginType(settings.default_margin_type || 'isolated');
-      
-      calculateDefaultLevels();
+    setAccountBalance(settings.account_balance);
+    setRiskPercentage(settings.max_risk_per_trade);
+    setLeverage(settings.default_leverage || 1);
+    setMarginType(settings.default_margin_type || 'isolated');
+    
+    calculateDefaultLevels();
 
-      // Проверяем подключение API
-      if (settings.api_key && settings.api_secret) {
-        testApiConnection();
-      }
+    // Проверяем подключение API
+    if (settings.api_key && settings.api_secret) {
+      testApiConnection();
     }
   }, [settings, entryPrice, direction]);
 
-  useEffect(() => {
-    calculateTrade();
+  // Мемоизированный расчет для оптимизации
+  const memoizedCalculation = useMemo(() => {
+    return calculateTradeInternal();
   }, [calculationMode, direction, entryPrice, stopLoss, takeProfit, quantity, riskPercentage, riskAmount, accountBalance, leverage]);
 
-  const calculateDefaultLevels = () => {
-    if (!settings) return;
+  useEffect(() => {
+    setCalculation(memoizedCalculation.calculation);
+    setErrors(memoizedCalculation.errors);
+    
+    // Обновляем состояния для синхронизации
+    if (memoizedCalculation.calculation) {
+      if (calculationMode === 'risk_percentage') {
+        setRiskAmount(memoizedCalculation.calculation.riskAmount);
+        setQuantity(memoizedCalculation.calculation.quantity);
+      } else if (calculationMode === 'fixed_amount') {
+        setRiskPercentage(memoizedCalculation.calculation.riskPercentage);
+        setQuantity(memoizedCalculation.calculation.quantity);
+      } else if (calculationMode === 'fixed_stoploss') {
+        setRiskAmount(memoizedCalculation.calculation.riskAmount);
+        setQuantity(memoizedCalculation.calculation.quantity);
+      }
+    }
+  }, [memoizedCalculation, calculationMode]);
 
+  const loadSettingsAsync = async () => {
+    try {
+      const response = await fetch('/api/settings');
+      if (response.ok) {
+        const data = await response.json();
+        const tradingSettings = data.trading || DEFAULT_SETTINGS;
+        setSettings({
+          ...DEFAULT_SETTINGS,
+          ...tradingSettings
+        });
+      }
+    } catch (error) {
+      console.error('Ошибка загрузки настроек:', error);
+      // Продолжаем работу с дефолтными настройками
+    }
+  };
+
+  const calculateDefaultLevels = () => {
     if (direction === 'LONG') {
       const defaultStopLoss = entryPrice * (1 - settings.default_stop_loss_percentage / 100);
       const defaultTakeProfit = entryPrice * (1 + settings.default_take_profit_percentage / 100);
@@ -108,28 +155,6 @@ const RealTradingModal: React.FC<RealTradingModalProps> = ({
       const defaultTakeProfit = entryPrice * (1 - settings.default_take_profit_percentage / 100);
       setStopLoss(defaultStopLoss);
       setTakeProfit(defaultTakeProfit);
-    }
-  };
-
-  const loadSettings = async () => {
-    try {
-      const response = await fetch('/api/settings');
-      if (response.ok) {
-        const data = await response.json();
-        setSettings(data.trading || {
-          account_balance: 10000,
-          max_risk_per_trade: 2,
-          default_stop_loss_percentage: 2,
-          default_take_profit_percentage: 6,
-          default_leverage: 1,
-          default_margin_type: 'isolated',
-          confirm_trades: true
-        });
-      }
-    } catch (error) {
-      console.error('Ошибка загрузки настроек:', error);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -164,7 +189,7 @@ const RealTradingModal: React.FC<RealTradingModalProps> = ({
     }
   };
 
-  const calculateTrade = () => {
+  const calculateTradeInternal = () => {
     const newErrors: string[] = [];
     
     if (entryPrice <= 0) {
@@ -205,11 +230,8 @@ const RealTradingModal: React.FC<RealTradingModalProps> = ({
       newErrors.push('Кредитное плечо должно быть от 1 до 100');
     }
 
-    setErrors(newErrors);
-
     if (newErrors.length > 0) {
-      setCalculation(null);
-      return;
+      return { calculation: null, errors: newErrors };
     }
 
     let calculatedQuantity = quantity;
@@ -265,18 +287,7 @@ const RealTradingModal: React.FC<RealTradingModalProps> = ({
       direction
     };
 
-    setCalculation(newCalculation);
-
-    if (calculationMode === 'risk_percentage') {
-      setRiskAmount(calculatedRiskAmount);
-      setQuantity(calculatedQuantity);
-    } else if (calculationMode === 'fixed_amount') {
-      setRiskPercentage(calculatedRiskPercentage);
-      setQuantity(calculatedQuantity);
-    } else if (calculationMode === 'fixed_stoploss') {
-      setRiskAmount(calculatedRiskAmount);
-      setQuantity(calculatedQuantity);
-    }
+    return { calculation: newCalculation, errors: [] };
   };
 
   const executeRealTrade = async () => {
@@ -326,19 +337,6 @@ const RealTradingModal: React.FC<RealTradingModalProps> = ({
       setSaving(false);
     }
   };
-
-  if (loading) {
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-        <div className="bg-white rounded-lg p-8">
-          <div className="flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500 mr-3"></div>
-            <span className="text-gray-700">Загрузка настроек...</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
