@@ -95,7 +95,6 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
         symbol={alert.symbol}
         alertPrice={alert.price}
         alertTime={alert.close_timestamp || alert.timestamp}
-        alerts={relatedAlerts}
         onClose={() => setSelectedChart(null)} // Возвращаемся к селектору
       />
     );
