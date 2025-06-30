@@ -73,7 +73,6 @@ const RealTradingModal: React.FC<RealTradingModalProps> = ({
   
   // Состояния для настроек - используем дефолтные значения сразу
   const [settings, setSettings] = useState<TradingSettings>(DEFAULT_SETTINGS);
-  const [loading, setLoading] = useState(false); // Убираем начальную загрузку
   const [saving, setSaving] = useState(false);
   const [apiConnected, setApiConnected] = useState(false);
   const [testingApi, setTestingApi] = useState(false);

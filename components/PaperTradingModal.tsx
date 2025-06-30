@@ -59,7 +59,6 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
   
   // Состояния для настроек - используем дефолтные значения сразу
   const [settings, setSettings] = useState<TradingSettings>(DEFAULT_SETTINGS);
-  const [loading, setLoading] = useState(false); // Убираем начальную загрузку
   const [saving, setSaving] = useState(false);
   
   // Состояния для результатов расчета
