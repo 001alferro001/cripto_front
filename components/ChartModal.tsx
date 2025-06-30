@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, ExternalLink, Download, BookOpen, Info, Calculator, DollarSign } from 'lucide-react';
+import { X, ExternalLink, Download, BookOpen, Info, Calculator, DollarSign, Clock } from 'lucide-react';
 import OrderBookModal from './OrderBookModal';
 import TimeZoneToggle from './TimeZoneToggle';
 import PaperTradingModal from './PaperTradingModal';
@@ -74,6 +74,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
   const [showPaperTrading, setShowPaperTrading] = useState(false);
   const [showRealTrading, setShowRealTrading] = useState(false);
   const [chartReady, setChartReady] = useState(false);
+  const [dataSource, setDataSource] = useState<'api' | 'mock'>('api');
   
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
@@ -101,6 +102,38 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       createChart();
     }
   }, [chartReady, chartData]);
+
+  const generateMockData = () => {
+    const now = Date.now();
+    const data = [];
+    let price = alert.price || 50000;
+    
+    // Генерируем 120 свечей за последние 2 часа
+    for (let i = 119; i >= 0; i--) {
+      const timestamp = now - (i * 60 * 1000); // каждая свеча = 1 минута
+      const change = (Math.random() - 0.5) * price * 0.02; // изменение до 2%
+      const open = price;
+      const close = price + change;
+      const high = Math.max(open, close) + Math.random() * price * 0.01;
+      const low = Math.min(open, close) - Math.random() * price * 0.01;
+      const volume = Math.random() * 1000000;
+      
+      data.push({
+        timestamp,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        volume_usdt: volume * price,
+        is_long: close > open
+      });
+      
+      price = close;
+    }
+    
+    return data;
+  };
 
   const loadLightweightChartsScript = async (): Promise<void> => {
     if (window.LightweightCharts) {
@@ -151,29 +184,48 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
 
       const alertTime = alert.close_timestamp || alert.timestamp;
       
-      // Используем AbortController для отмены запроса при размонтировании
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+      let data = [];
 
-      const response = await fetch(`/api/chart-data/${alert.symbol}?hours=2&alert_time=${alertTime}`, {
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        throw new Error('Ошибка загрузки данных графика');
+      // Сначала пробуем загрузить данные с API
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+
+        const response = await fetch(`/api/chart-data/${alert.symbol}?hours=2&alert_time=${alertTime}`, {
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          const responseData = await response.json();
+          data = responseData.chart_data || responseData.data || responseData || [];
+          setDataSource('api');
+          console.log(`Загружено ${data.length} свечей для ${alert.symbol} с API`);
+        } else {
+          throw new Error(`API вернул статус ${response.status}`);
+        }
+      } catch (apiError) {
+        console.warn('Ошибка загрузки с API, используем mock данные:', apiError);
+        data = generateMockData();
+        setDataSource('mock');
       }
 
-      const data = await response.json();
-      console.log(`Загружено ${data.chart_data?.length || 0} свечей для ${alert.symbol}`);
-      setChartData(data.chart_data || []);
+      setChartData(data);
     } catch (err) {
       if (err.name === 'AbortError') {
         console.log('Chart data request was aborted');
         return;
       }
-      setError(err instanceof Error ? err.message : 'Неизвестная ошибка');
+      console.error('Ошибка загрузки данных:', err);
+      // В случае ошибки используем mock данные
+      const mockData = generateMockData();
+      setChartData(mockData);
+      setDataSource('mock');
     } finally {
       setLoading(false);
     }
@@ -301,7 +353,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       position: 'aboveBar',
       color: '#f68410',
       shape: 'circle',
-      text: `Alert: $${alert.price.toFixed(6)}`,
+      text: `🎯 Alert: $${alert.price.toFixed(6)}`,
     }];
 
     if (alert.candle_data?.alert_level) {
@@ -382,9 +434,16 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
           <div className="flex items-center justify-between p-6 border-b border-gray-200">
             <div>
               <h2 className="text-2xl font-bold text-gray-900">{alert.symbol}</h2>
-              <p className="text-gray-600">
-                График с данными • Алерт: {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
-              </p>
+              <div className="flex items-center space-x-4 mt-1">
+                <p className="text-gray-600">
+                  График с данными • Алерт: {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
+                </p>
+                {dataSource === 'mock' && (
+                  <span className="text-sm text-yellow-600 bg-yellow-100 px-2 py-1 rounded">
+                    Demo данные
+                  </span>
+                )}
+              </div>
               {alert.has_imbalance && (
                 <div className="flex items-center space-x-2 mt-2">
                   <span className="text-orange-500 text-sm">⚠️ Обнаружен имбаланс</span>
@@ -487,6 +546,9 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
                   <p className="text-gray-600">Загрузка данных графика...</p>
+                  <p className="text-xs text-gray-500 mt-2">
+                    {dataSource === 'mock' ? 'Используются demo данные' : 'Загрузка с API'}
+                  </p>
                 </div>
               </div>
             ) : error ? (
@@ -546,7 +608,8 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
               </div>
               <div>
                 <span className="text-gray-600">Время:</span>
-                <span className="ml-2 text-gray-900">
+                <span className="ml-2 text-gray-900 flex items-center">
+                  <Clock className="w-3 h-3 mr-1" />
                   {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
                 </span>
               </div>
@@ -589,6 +652,15 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
                 )}
               </div>
             )}
+
+            {/* Информация об источнике данных */}
+            <div className="mt-4 text-xs text-gray-500 flex justify-between items-center">
+              <span>
+                Источник данных: {dataSource === 'api' ? '🌐 API Backend' : '🎭 Demo данные'} • 
+                Powered by Lightweight Charts
+              </span>
+              <span>Часовой пояс: {timeZone === 'UTC' ? 'UTC' : 'Локальное время'}</span>
+            </div>
           </div>
         </div>
 

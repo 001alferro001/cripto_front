@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator, TrendingUp, TrendingDown } from 'lucide-react';
+import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator, TrendingUp, TrendingDown, Clock } from 'lucide-react';
 import PaperTradingModal from './PaperTradingModal';
 import RealTradingModal from './RealTradingModal';
+import { useTimeZone } from '../contexts/TimeZoneContext';
+import { formatTime } from '../utils/timeUtils';
 
 interface TradingViewChartProps {
   symbol: string;
@@ -45,6 +47,9 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const [showRealTrading, setShowRealTrading] = useState(false);
   const [tradingDirection, setTradingDirection] = useState<'LONG' | 'SHORT'>('LONG');
   const [chartData, setChartData] = useState<any[]>([]);
+  const [dataSource, setDataSource] = useState<'api' | 'mock'>('api');
+  
+  const { timeZone } = useTimeZone();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -149,6 +154,38 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     return lightweightChartsPromise;
   };
 
+  const generateMockData = () => {
+    const now = Date.now();
+    const data = [];
+    let price = alertPrice || 50000;
+    
+    // Генерируем 100 свечей за последние 100 минут
+    for (let i = 99; i >= 0; i--) {
+      const timestamp = now - (i * 60 * 1000); // каждая свеча = 1 минута
+      const change = (Math.random() - 0.5) * price * 0.02; // изменение до 2%
+      const open = price;
+      const close = price + change;
+      const high = Math.max(open, close) + Math.random() * price * 0.01;
+      const low = Math.min(open, close) - Math.random() * price * 0.01;
+      const volume = Math.random() * 1000000;
+      
+      data.push({
+        timestamp,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        volume_usdt: volume * price,
+        is_long: close > open
+      });
+      
+      price = close;
+    }
+    
+    return data;
+  };
+
   const loadChartData = async () => {
     if (!mountedRef.current) return;
 
@@ -156,15 +193,39 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       setIsLoading(true);
       setError(null);
 
-      // Загружаем данные свечей
-      const response = await fetch(`/api/chart-data/${symbol}?interval=${interval}&hours=24`);
-      
-      if (!response.ok) {
-        throw new Error('Ошибка загрузки данных графика');
-      }
+      let candleData = [];
 
-      const data = await response.json();
-      const candleData = data.chart_data || [];
+      // Сначала пробуем загрузить данные с API
+      try {
+        const apiUrl = `/api/chart-data/${symbol}?interval=${interval}&hours=24`;
+        console.log('Загружаем данные с API:', apiUrl);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
+        const response = await fetch(apiUrl, {
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          const data = await response.json();
+          candleData = data.chart_data || data.data || data || [];
+          setDataSource('api');
+          console.log('Данные загружены с API:', candleData.length, 'свечей');
+        } else {
+          throw new Error(`API вернул статус ${response.status}`);
+        }
+      } catch (apiError) {
+        console.warn('Ошибка загрузки с API, используем mock данные:', apiError);
+        candleData = generateMockData();
+        setDataSource('mock');
+      }
       
       setChartData(candleData);
       
@@ -174,8 +235,11 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     } catch (err) {
       if (mountedRef.current) {
         console.error('Ошибка загрузки данных графика:', err);
-        setError(err instanceof Error ? err.message : 'Ошибка загрузки данных');
-        setIsLoading(false);
+        // В случае полной ошибки, все равно показываем mock данные
+        const mockData = generateMockData();
+        setChartData(mockData);
+        setDataSource('mock');
+        createChart(mockData);
       }
     }
   };
@@ -248,21 +312,28 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       // Подготавливаем данные для графика
       if (data && data.length > 0) {
         const candleData = data.map(item => ({
-          time: Math.floor(item.timestamp / 1000),
-          open: item.open,
-          high: item.high,
-          low: item.low,
-          close: item.close,
-        }));
+          time: Math.floor((item.timestamp || Date.now()) / 1000),
+          open: Number(item.open) || 0,
+          high: Number(item.high) || 0,
+          low: Number(item.low) || 0,
+          close: Number(item.close) || 0,
+        })).filter(item => item.open > 0 && item.high > 0 && item.low > 0 && item.close > 0);
 
         const volumeData = data.map(item => ({
-          time: Math.floor(item.timestamp / 1000),
-          value: item.volume_usdt || item.volume,
+          time: Math.floor((item.timestamp || Date.now()) / 1000),
+          value: Number(item.volume_usdt || item.volume) || 0,
           color: item.is_long ? '#26a69a' : '#ef5350',
-        }));
+        })).filter(item => item.value > 0);
 
-        candlestickSeries.setData(candleData);
-        volumeSeries.setData(volumeData);
+        if (candleData.length > 0) {
+          candlestickSeries.setData(candleData);
+          console.log('Установлены данные свечей:', candleData.length);
+        }
+
+        if (volumeData.length > 0) {
+          volumeSeries.setData(volumeData);
+          console.log('Установлены данные объемов:', volumeData.length);
+        }
 
         // Добавляем маркеры алертов
         addAlertMarkers(candlestickSeries);
@@ -317,7 +388,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       position: 'aboveBar',
       color: '#f68410',
       shape: 'circle',
-      text: `Alert: $${alertPrice.toFixed(6)}`,
+      text: `🎯 Alert: $${alertPrice.toFixed(6)}`,
     });
 
     // Добавляем маркеры для связанных алертов
@@ -337,6 +408,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
     if (markers.length > 0) {
       series.setMarkers(markers);
+      console.log('Добавлены маркеры алертов:', markers.length);
     }
   };
 
@@ -429,6 +501,17 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
               {alertPrice && (
                 <span className="text-sm text-orange-600 bg-orange-100 px-2 py-1 rounded">
                   Alert: ${alertPrice.toFixed(6)}
+                </span>
+              )}
+              {alertTime && (
+                <span className="text-sm text-blue-600 bg-blue-100 px-2 py-1 rounded flex items-center">
+                  <Clock className="w-3 h-3 mr-1" />
+                  {formatTime(alertTime, timeZone)}
+                </span>
+              )}
+              {dataSource === 'mock' && (
+                <span className="text-sm text-yellow-600 bg-yellow-100 px-2 py-1 rounded">
+                  Demo данные
                 </span>
               )}
               {error && (
@@ -529,7 +612,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                     {!lightweightChartsLoaded ? 'Загрузка Lightweight Charts...' : 'Загрузка данных графика...'}
                   </p>
                   <p className="text-xs text-gray-500 mt-2">
-                    Попытка {retryCount + 1}
+                    Попытка {retryCount + 1} • {dataSource === 'mock' ? 'Используются demo данные' : 'Загрузка с API'}
                   </p>
                 </div>
               </div>
@@ -556,7 +639,8 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                       </button>
                     </div>
                     <p className="text-xs text-gray-500">
-                      Библиотека загружена: {lightweightChartsLoaded ? 'Да' : 'Нет'}
+                      Библиотека загружена: {lightweightChartsLoaded ? 'Да' : 'Нет'} • 
+                      Источник данных: {dataSource}
                     </p>
                   </div>
                 </div>
@@ -573,11 +657,17 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           {/* Footer */}
           <div className="p-3 border-t border-gray-200 bg-gray-50">
             <div className="flex justify-between items-center text-sm text-gray-600">
-              <span>Данные предоставлены Lightweight Charts</span>
+              <span>
+                Данные: {dataSource === 'api' ? 'API Backend' : 'Demo данные'} • 
+                Powered by Lightweight Charts
+              </span>
               <div className="flex items-center space-x-4">
                 <span>📈 LONG: прибыль при росте</span>
                 <span>📉 SHORT: прибыль при падении</span>
                 <span>Свечей: {chartData.length}</span>
+                {alertTime && (
+                  <span>🕐 Алерт: {formatTime(alertTime, timeZone, { includeDate: false })}</span>
+                )}
               </div>
             </div>
           </div>
