@@ -61,6 +61,10 @@ declare global {
   }
 }
 
+// Кэш для загруженного скрипта
+let chartScriptLoaded = false;
+let chartScriptPromise: Promise<void> | null = null;
+
 const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
   const [chartData, setChartData] = useState<ChartData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,8 +83,11 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
   const { timeZone } = useTimeZone();
 
   useEffect(() => {
-    loadTradingViewScript();
-    loadChartData();
+    // Параллельная загрузка скрипта и данных
+    Promise.all([
+      loadTradingViewScript(),
+      loadChartData()
+    ]).catch(console.error);
     
     return () => {
       if (chartRef.current) {
@@ -95,34 +102,46 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
     }
   }, [chartReady, chartData]);
 
-  const loadTradingViewScript = async () => {
+  const loadTradingViewScript = async (): Promise<void> => {
     if (window.LightweightCharts) {
       setChartReady(true);
-      return;
+      return Promise.resolve();
     }
 
-    try {
+    if (chartScriptLoaded) {
+      setChartReady(true);
+      return Promise.resolve();
+    }
+
+    if (chartScriptPromise) {
+      return chartScriptPromise;
+    }
+
+    chartScriptPromise = new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = 'https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js';
       script.async = true;
       
       script.onload = () => {
         console.log('TradingView Lightweight Charts loaded successfully');
+        chartScriptLoaded = true;
         setChartReady(true);
         setError(null);
+        resolve();
       };
       
       script.onerror = () => {
         console.error('Failed to load TradingView Lightweight Charts');
         setError('Ошибка загрузки библиотеки графиков');
         setChartReady(false);
+        chartScriptPromise = null;
+        reject(new Error('Script loading failed'));
       };
       
       document.head.appendChild(script);
-    } catch (err) {
-      console.error('Error loading TradingView script:', err);
-      setError('Ошибка загрузки графиков');
-    }
+    });
+
+    return chartScriptPromise;
   };
 
   const loadChartData = async () => {
@@ -131,7 +150,16 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       setError(null);
 
       const alertTime = alert.close_timestamp || alert.timestamp;
-      const response = await fetch(`/api/chart-data/${alert.symbol}?hours=2&alert_time=${alertTime}`);
+      
+      // Используем AbortController для отмены запроса при размонтировании
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+
+      const response = await fetch(`/api/chart-data/${alert.symbol}?hours=2&alert_time=${alertTime}`, {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
       
       if (!response.ok) {
         throw new Error('Ошибка загрузки данных графика');
@@ -141,6 +169,10 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       console.log(`Загружено ${data.chart_data?.length || 0} свечей для ${alert.symbol}`);
       setChartData(data.chart_data || []);
     } catch (err) {
+      if (err.name === 'AbortError') {
+        console.log('Chart data request was aborted');
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Неизвестная ошибка');
     } finally {
       setLoading(false);
@@ -235,12 +267,18 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
 
       chart.timeScale().fitContent();
 
+      // Оптимизированный ResizeObserver
+      let resizeTimeout: NodeJS.Timeout;
       const resizeObserver = new ResizeObserver(entries => {
         if (entries.length === 0 || entries[0].target !== chartContainerRef.current) {
           return;
         }
-        const newRect = entries[0].contentRect;
-        chart.applyOptions({ width: newRect.width, height: newRect.height });
+        
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+          const newRect = entries[0].contentRect;
+          chart.applyOptions({ width: newRect.width, height: newRect.height });
+        }, 100); // Дебаунс для производительности
       });
 
       if (chartContainerRef.current) {

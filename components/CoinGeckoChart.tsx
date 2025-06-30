@@ -26,6 +26,10 @@ interface PriceData {
   total_volumes: number[][];
 }
 
+// Глобальный кэш для Chart.js
+let chartJsLoaded = false;
+let chartJsPromise: Promise<void> | null = null;
+
 const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
   const [coinData, setCoinData] = useState<CoinData | null>(null);
   const [priceData, setPriceData] = useState<PriceData | null>(null);
@@ -38,7 +42,11 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
   const chartInstanceRef = useRef<any>(null);
 
   useEffect(() => {
-    loadCoinData();
+    // Параллельная загрузка данных и скрипта
+    Promise.all([
+      loadCoinData(),
+      loadChartScript()
+    ]).catch(console.error);
   }, [symbol]);
 
   useEffect(() => {
@@ -48,10 +56,10 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
   }, [coinData, days]);
 
   useEffect(() => {
-    if (priceData && coinData && chartRef.current) {
-      loadChartScript();
+    if (priceData && coinData && chartReady && chartRef.current) {
+      createChart();
     }
-  }, [priceData, coinData]);
+  }, [priceData, coinData, chartReady]);
 
   const loadCoinData = async () => {
     try {
@@ -72,7 +80,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
 
       try {
         const response = await fetch(
@@ -139,7 +147,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
 
       const response = await fetch(
         `https://api.coingecko.com/api/v3/coins/${coinData.id}/market_chart?vs_currency=usd&days=${days}&interval=${days === '1' ? 'hourly' : 'daily'}`,
@@ -162,19 +170,29 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
         setPriceData(null);
       }
     } catch (error) {
-      console.warn('Ошибка загрузки исторических данных:', error);
+      if (error.name !== 'AbortError') {
+        console.warn('Ошибка загрузки исторических данных:', error);
+      }
       setPriceData(null);
     }
   };
 
-  const loadChartScript = async () => {
-    try {
-      // Проверяем, загружен ли уже скрипт Chart.js
-      if (window.Chart) {
-        createChart();
-        return;
-      }
+  const loadChartScript = async (): Promise<void> => {
+    if (window.Chart) {
+      setChartReady(true);
+      return Promise.resolve();
+    }
 
+    if (chartJsLoaded) {
+      setChartReady(true);
+      return Promise.resolve();
+    }
+
+    if (chartJsPromise) {
+      return chartJsPromise;
+    }
+
+    chartJsPromise = new Promise((resolve, reject) => {
       // Удаляем существующие скрипты Chart.js
       const existingScripts = document.querySelectorAll('script[src*="chart"]');
       existingScripts.forEach(script => script.remove());
@@ -185,28 +203,26 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       
       script.onload = () => {
         console.log('Chart.js loaded successfully');
-        // Небольшая задержка для инициализации
-        setTimeout(() => {
-          createChart();
-        }, 100);
+        chartJsLoaded = true;
+        setChartReady(true);
+        resolve();
       };
       
       script.onerror = () => {
         console.error('Failed to load Chart.js');
         setError('Ошибка загрузки библиотеки графиков');
-        setChartReady(true); // Показываем интерфейс без графика
+        chartJsPromise = null;
+        reject(new Error('Chart.js loading failed'));
       };
       
       document.head.appendChild(script);
-    } catch (err) {
-      console.error('Error loading Chart.js:', err);
-      setError('Ошибка загрузки графиков');
-      setChartReady(true);
-    }
+    });
+
+    return chartJsPromise;
   };
 
   const createChart = () => {
-    if (!priceData || !coinData || !chartRef.current) {
+    if (!priceData || !coinData || !chartRef.current || !window.Chart) {
       setChartReady(true);
       return;
     }
@@ -337,12 +353,10 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
         }
       });
 
-      setChartReady(true);
       setError(null);
     } catch (error) {
       console.error('Error creating chart:', error);
       setError('Ошибка создания графика');
-      setChartReady(true);
     }
   };
 
@@ -351,7 +365,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       const cleanSymbol = symbol.replace('USDT', '').toLowerCase();
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
       
       const searchResponse = await fetch(
         `https://api.coingecko.com/api/v3/search?query=${cleanSymbol}`,
@@ -380,7 +394,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       }
       
       const coinController = new AbortController();
-      const coinTimeoutId = setTimeout(() => coinController.abort(), 8000);
+      const coinTimeoutId = setTimeout(() => coinController.abort(), 6000);
       
       const coinResponse = await fetch(
         `https://api.coingecko.com/api/v3/coins/${coin.id}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false`,
@@ -416,7 +430,9 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       };
       
     } catch (error) {
-      console.error('Ошибка поиска монеты:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Ошибка поиска монеты:', error);
+      }
       return null;
     }
   };
@@ -590,6 +606,11 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
     setError(null);
     setPriceData(null);
     setChartReady(false);
+    
+    // Сбрасываем кэш
+    chartJsLoaded = false;
+    chartJsPromise = null;
+    
     if (chartInstanceRef.current) {
       chartInstanceRef.current.destroy();
       chartInstanceRef.current = null;

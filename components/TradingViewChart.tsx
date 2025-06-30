@@ -17,6 +17,10 @@ declare global {
   }
 }
 
+// Глобальный кэш для TradingView скрипта
+let tradingViewScriptLoaded = false;
+let tradingViewScriptPromise: Promise<void> | null = null;
+
 const TradingViewChart: React.FC<TradingViewChartProps> = ({ 
   symbol, 
   alertPrice, 
@@ -56,35 +60,61 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     }
   }, [symbol, interval, chartType, theme]);
 
-  const loadTradingViewScript = () => {
+  const loadTradingViewScript = async (): Promise<void> => {
     if (window.TradingView) {
       createWidget();
-      return;
+      return Promise.resolve();
+    }
+
+    if (tradingViewScriptLoaded) {
+      createWidget();
+      return Promise.resolve();
+    }
+
+    if (tradingViewScriptPromise) {
+      return tradingViewScriptPromise;
     }
 
     // Проверяем, не загружается ли уже скрипт
     const existingScript = document.querySelector('script[src*="tradingview"], script[src*="tv.js"]');
     if (existingScript) {
-      existingScript.addEventListener('load', () => {
-        if (window.TradingView) {
-          createWidget();
-        }
+      tradingViewScriptPromise = new Promise((resolve, reject) => {
+        existingScript.addEventListener('load', () => {
+          if (window.TradingView) {
+            tradingViewScriptLoaded = true;
+            createWidget();
+            resolve();
+          }
+        });
+        existingScript.addEventListener('error', () => {
+          handleScriptError();
+          reject(new Error('Script loading failed'));
+        });
       });
-      existingScript.addEventListener('error', handleScriptError);
-      return;
+      return tradingViewScriptPromise;
     }
 
-    const script = document.createElement('script');
-    script.src = 'https://s3.tradingview.com/tv.js';
-    script.async = true;
-    script.onload = () => {
-      console.log('TradingView script loaded successfully');
-      createWidget();
-      setError(null);
-      setRetryCount(0);
-    };
-    script.onerror = handleScriptError;
-    document.head.appendChild(script);
+    tradingViewScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://s3.tradingview.com/tv.js';
+      script.async = true;
+      script.onload = () => {
+        console.log('TradingView script loaded successfully');
+        tradingViewScriptLoaded = true;
+        createWidget();
+        setError(null);
+        setRetryCount(0);
+        resolve();
+      };
+      script.onerror = () => {
+        handleScriptError();
+        tradingViewScriptPromise = null;
+        reject(new Error('Script loading failed'));
+      };
+      document.head.appendChild(script);
+    });
+
+    return tradingViewScriptPromise;
   };
 
   const handleScriptError = () => {
@@ -243,6 +273,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     setError(null);
     setIsLoading(true);
     setRetryCount(0);
+
+    // Сбрасываем кэш
+    tradingViewScriptLoaded = false;
+    tradingViewScriptPromise = null;
 
     // Удаляем существующие скрипты
     const existingScripts = document.querySelectorAll('script[src*="tradingview"], script[src*="tv.js"]');
