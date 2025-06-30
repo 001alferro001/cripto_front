@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { X, ExternalLink, TrendingUp, TrendingDown, RefreshCw, AlertTriangle, Globe } from 'lucide-react';
 
 interface CoinGeckoChartProps {
@@ -34,6 +34,8 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
   const [days, setDays] = useState('7');
   const [retryCount, setRetryCount] = useState(0);
   const [chartReady, setChartReady] = useState(false);
+  const chartRef = useRef<HTMLCanvasElement>(null);
+  const chartInstanceRef = useRef<any>(null);
 
   useEffect(() => {
     loadCoinData();
@@ -46,7 +48,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
   }, [coinData, days]);
 
   useEffect(() => {
-    if (priceData && coinData) {
+    if (priceData && coinData && chartRef.current) {
       loadChartScript();
     }
   }, [priceData, coinData]);
@@ -56,11 +58,9 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       setLoading(true);
       setError(null);
 
-      // Преобразуем символ (например, BTCUSDT -> bitcoin)
       const coinId = getCoinId(symbol);
       
       if (!coinId) {
-        // Если не нашли в маппинге, попробуем поиск по символу
         const searchResult = await searchCoinBySymbol(symbol);
         if (!searchResult) {
           setError('Криптовалюта не найдена в CoinGecko');
@@ -68,23 +68,20 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
           return;
         }
         setCoinData(searchResult);
-        setLoading(false);
         return;
       }
 
-      // Загружаем данные о монете с правильными параметрами
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 секунд таймаут
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
       try {
-        // Используем правильный endpoint с минимальными параметрами
         const response = await fetch(
           `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false`,
           { 
             signal: controller.signal,
             headers: {
               'Accept': 'application/json',
-              'User-Agent': 'CryptoAnalyzer/1.0'
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
           }
         );
@@ -100,7 +97,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
 
         const data = await response.json();
         
-        // Проверяем наличие необходимых данных
         if (!data.market_data || !data.market_data.current_price) {
           throw new Error('Неполные данные от CoinGecko API');
         }
@@ -143,16 +139,15 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-      // Загружаем исторические данные цен
       const response = await fetch(
         `https://api.coingecko.com/api/v3/coins/${coinData.id}/market_chart?vs_currency=usd&days=${days}&interval=${days === '1' ? 'hourly' : 'daily'}`,
         { 
           signal: controller.signal,
           headers: {
             'Accept': 'application/json',
-            'User-Agent': 'CryptoAnalyzer/1.0'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           }
         }
       );
@@ -180,46 +175,53 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
         return;
       }
 
+      // Удаляем существующие скрипты Chart.js
+      const existingScripts = document.querySelectorAll('script[src*="chart"]');
+      existingScripts.forEach(script => script.remove());
+
       const script = document.createElement('script');
       script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js';
       script.async = true;
       
       script.onload = () => {
         console.log('Chart.js loaded successfully');
-        createChart();
+        // Небольшая задержка для инициализации
+        setTimeout(() => {
+          createChart();
+        }, 100);
       };
       
       script.onerror = () => {
         console.error('Failed to load Chart.js');
-        setChartReady(false);
+        setError('Ошибка загрузки библиотеки графиков');
+        setChartReady(true); // Показываем интерфейс без графика
       };
       
       document.head.appendChild(script);
     } catch (err) {
       console.error('Error loading Chart.js:', err);
-      setChartReady(false);
+      setError('Ошибка загрузки графиков');
+      setChartReady(true);
     }
   };
 
   const createChart = () => {
-    if (!priceData || !coinData) {
-      setChartReady(true); // Показываем интерфейс даже без графика
+    if (!priceData || !coinData || !chartRef.current) {
+      setChartReady(true);
       return;
     }
 
     try {
-      const canvas = document.getElementById('priceChart') as HTMLCanvasElement;
-      if (!canvas) {
-        setTimeout(createChart, 100); // Повторяем попытку через 100мс
+      const ctx = chartRef.current.getContext('2d');
+      if (!ctx) {
+        setChartReady(true);
         return;
       }
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      // Очищаем предыдущий график
-      if (window.chartInstance) {
-        window.chartInstance.destroy();
+      // Уничтожаем предыдущий график
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+        chartInstanceRef.current = null;
       }
 
       // Подготавливаем данные для графика
@@ -234,7 +236,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       const volumes = priceData.total_volumes.map(([, volume]) => volume);
 
       // Создаем график
-      window.chartInstance = new window.Chart(ctx, {
+      chartInstanceRef.current = new window.Chart(ctx, {
         type: 'line',
         data: {
           labels,
@@ -336,28 +338,28 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       });
 
       setChartReady(true);
+      setError(null);
     } catch (error) {
       console.error('Error creating chart:', error);
-      setChartReady(true); // Показываем интерфейс даже при ошибке графика
+      setError('Ошибка создания графика');
+      setChartReady(true);
     }
   };
 
   const searchCoinBySymbol = async (symbol: string): Promise<CoinData | null> => {
     try {
-      // Убираем USDT из символа для поиска
       const cleanSymbol = symbol.replace('USDT', '').toLowerCase();
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
       
-      // Поиск по символу
       const searchResponse = await fetch(
         `https://api.coingecko.com/api/v3/search?query=${cleanSymbol}`,
         { 
           signal: controller.signal,
           headers: {
             'Accept': 'application/json',
-            'User-Agent': 'CryptoAnalyzer/1.0'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           }
         }
       );
@@ -377,7 +379,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
         return null;
       }
       
-      // Загружаем полные данные найденной монеты
       const coinController = new AbortController();
       const coinTimeoutId = setTimeout(() => coinController.abort(), 8000);
       
@@ -387,7 +388,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
           signal: coinController.signal,
           headers: {
             'Accept': 'application/json',
-            'User-Agent': 'CryptoAnalyzer/1.0'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           }
         }
       );
@@ -421,9 +422,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
   };
 
   const getCoinId = (symbol: string): string | null => {
-    // Расширенный и обновленный маппинг популярных символов на ID CoinGecko
     const symbolMap: { [key: string]: string } = {
-      // Топ криптовалюты
       'BTCUSDT': 'bitcoin',
       'ETHUSDT': 'ethereum',
       'BNBUSDT': 'binancecoin',
@@ -481,8 +480,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       'FETUSDT': 'fetch-ai',
       'CELRUSDT': 'celer-network',
       'BANDUSDT': 'band-protocol',
-      
-      // Новые популярные токены 2024
       'PEPEUSDT': 'pepe',
       'WIFUSDT': 'dogwifcoin',
       'BONKUSDT': 'bonk',
@@ -520,8 +517,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       'GALAUSDT': 'gala',
       'GMTUSDT': 'stepn',
       'APEUSDT': 'apecoin',
-      
-      // DeFi токены
       'LRCUSDT': 'loopring',
       'CRVUSDT': 'curve-dao-token',
       'SUSHIUSDT': 'sushi',
@@ -595,8 +590,22 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
     setError(null);
     setPriceData(null);
     setChartReady(false);
+    if (chartInstanceRef.current) {
+      chartInstanceRef.current.destroy();
+      chartInstanceRef.current = null;
+    }
     loadCoinData();
   };
+
+  // Cleanup при размонтировании
+  useEffect(() => {
+    return () => {
+      if (chartInstanceRef.current) {
+        chartInstanceRef.current.destroy();
+        chartInstanceRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -635,7 +644,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
           </div>
           
           <div className="flex items-center space-x-3">
-            {/* Кнопка обновления */}
             <button
               onClick={retryLoad}
               disabled={loading}
@@ -645,7 +653,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
               <span>Обновить</span>
             </button>
 
-            {/* Период графика */}
             <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
               {[
                 { value: '1', label: '1д' },
@@ -803,15 +810,23 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
 
               {/* График */}
               <div className="flex-1 bg-gray-50 rounded-lg p-4 min-h-[400px]">
-                {chartReady ? (
-                  <div className="h-full">
-                    <canvas id="priceChart" className="w-full h-full"></canvas>
-                  </div>
-                ) : (
+                {!chartReady ? (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-2"></div>
                       <p className="text-gray-600">Загрузка графика...</p>
+                    </div>
+                  </div>
+                ) : priceData ? (
+                  <div className="h-full">
+                    <canvas ref={chartRef} className="w-full h-full"></canvas>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center">
+                      <AlertTriangle className="w-8 h-8 text-yellow-500 mx-auto mb-2" />
+                      <p className="text-gray-600">График недоступен</p>
+                      <p className="text-sm text-gray-500 mt-1">Данные цен не загружены</p>
                     </div>
                   </div>
                 )}
@@ -850,7 +865,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
 declare global {
   interface Window {
     Chart: any;
-    chartInstance: any;
   }
 }
 

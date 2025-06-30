@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, ExternalLink, Download, BookOpen, Info } from 'lucide-react';
+import { X, ExternalLink, Download, BookOpen, Info, Calculator, DollarSign } from 'lucide-react';
 import OrderBookModal from './OrderBookModal';
 import TimeZoneToggle from './TimeZoneToggle';
+import PaperTradingModal from './PaperTradingModal';
+import RealTradingModal from './RealTradingModal';
 import { useTimeZone } from '../contexts/TimeZoneContext';
 import { formatTime } from '../utils/timeUtils';
 
@@ -53,7 +55,6 @@ interface ChartModalProps {
   onClose: () => void;
 }
 
-// Объявляем типы для TradingView Lightweight Charts
 declare global {
   interface Window {
     LightweightCharts: any;
@@ -66,6 +67,8 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
   const [error, setError] = useState<string | null>(null);
   const [showOrderBook, setShowOrderBook] = useState(false);
   const [showTimestampInfo, setShowTimestampInfo] = useState(false);
+  const [showPaperTrading, setShowPaperTrading] = useState(false);
+  const [showRealTrading, setShowRealTrading] = useState(false);
   const [chartReady, setChartReady] = useState(false);
   
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -80,7 +83,6 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
     loadChartData();
     
     return () => {
-      // Cleanup chart on unmount
       if (chartRef.current) {
         chartRef.current.remove();
       }
@@ -94,14 +96,12 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
   }, [chartReady, chartData]);
 
   const loadTradingViewScript = async () => {
-    // Проверяем, загружен ли уже скрипт
     if (window.LightweightCharts) {
       setChartReady(true);
       return;
     }
 
     try {
-      // Загружаем TradingView Lightweight Charts
       const script = document.createElement('script');
       script.src = 'https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js';
       script.async = true;
@@ -152,13 +152,11 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       return;
     }
 
-    // Удаляем предыдущий график если есть
     if (chartRef.current) {
       chartRef.current.remove();
     }
 
     try {
-      // Создаем график
       const chart = window.LightweightCharts.createChart(chartContainerRef.current, {
         width: chartContainerRef.current.clientWidth,
         height: 500,
@@ -185,7 +183,6 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
 
       chartRef.current = chart;
 
-      // Добавляем серию свечей
       const candlestickSeries = chart.addCandlestickSeries({
         upColor: '#26a69a',
         downColor: '#ef5350',
@@ -196,7 +193,6 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
 
       candlestickSeriesRef.current = candlestickSeries;
 
-      // Добавляем серию объемов
       const volumeSeries = chart.addHistogramSeries({
         color: '#26a69a',
         priceFormat: {
@@ -207,7 +203,6 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
 
       volumeSeriesRef.current = volumeSeries;
 
-      // Настраиваем шкалу объемов
       chart.priceScale('volume').applyOptions({
         scaleMargins: {
           top: 0.7,
@@ -215,38 +210,31 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
         },
       });
 
-      // Подготавливаем данные для свечей
       const candleData = chartData.map(item => ({
-        time: Math.floor(item.timestamp / 1000), // Конвертируем в секунды
+        time: Math.floor(item.timestamp / 1000),
         open: item.open,
         high: item.high,
         low: item.low,
         close: item.close,
       }));
 
-      // Подготавливаем данные для объемов
       const volumeData = chartData.map(item => ({
         time: Math.floor(item.timestamp / 1000),
         value: item.volume_usdt,
         color: item.is_long ? '#26a69a' : '#ef5350',
       }));
 
-      // Устанавливаем данные
       candlestickSeries.setData(candleData);
       volumeSeries.setData(volumeData);
 
-      // Добавляем маркеры алертов
       addAlertMarkers(candlestickSeries);
 
-      // Добавляем зоны имбаланса
       if (alert.has_imbalance && alert.imbalance_data) {
         addImbalanceZones(chart);
       }
 
-      // Подгоняем график под данные
       chart.timeScale().fitContent();
 
-      // Обработка изменения размера
       const resizeObserver = new ResizeObserver(entries => {
         if (entries.length === 0 || entries[0].target !== chartContainerRef.current) {
           return;
@@ -278,7 +266,6 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       text: `Alert: $${alert.price.toFixed(6)}`,
     }];
 
-    // Добавляем маркер уровня алерта если есть
     if (alert.candle_data?.alert_level) {
       markers.push({
         time: alertTimestamp,
@@ -298,7 +285,6 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
     const alertTime = alert.close_timestamp || alert.timestamp;
     const alertTimestamp = Math.floor((typeof alertTime === 'number' ? alertTime : new Date(alertTime).getTime()) / 1000);
 
-    // Создаем линейную серию для зон имбаланса
     const imbalanceTopSeries = chart.addLineSeries({
       color: alert.imbalance_data.direction === 'bullish' ? '#26a69a' : '#ef5350',
       lineWidth: 2,
@@ -313,9 +299,8 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       title: `${alert.imbalance_data.type.toUpperCase()} Bottom`,
     });
 
-    // Добавляем данные для линий
-    const startTime = alertTimestamp - 300; // 5 минут назад
-    const endTime = alertTimestamp + 300;   // 5 минут вперед
+    const startTime = alertTimestamp - 300;
+    const endTime = alertTimestamp + 300;
 
     imbalanceTopSeries.setData([
       { time: startTime, value: alert.imbalance_data.top },
@@ -352,216 +337,253 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg w-full max-w-[95vw] h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">{alert.symbol}</h2>
-            <p className="text-gray-600">
-              График с данными • Алерт: {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
-            </p>
-            {alert.has_imbalance && (
-              <div className="flex items-center space-x-2 mt-2">
-                <span className="text-orange-500 text-sm">⚠️ Обнаружен имбаланс</span>
-                {alert.imbalance_data && (
-                  <span className="text-xs text-gray-500">
-                    ({alert.imbalance_data.type}, {alert.imbalance_data.direction}, сила: {alert.imbalance_data.strength.toFixed(1)}%)
-                  </span>
+    <>
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className="bg-white rounded-lg w-full max-w-[95vw] h-[90vh] flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between p-6 border-b border-gray-200">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">{alert.symbol}</h2>
+              <p className="text-gray-600">
+                График с данными • Алерт: {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
+              </p>
+              {alert.has_imbalance && (
+                <div className="flex items-center space-x-2 mt-2">
+                  <span className="text-orange-500 text-sm">⚠️ Обнаружен имбаланс</span>
+                  {alert.imbalance_data && (
+                    <span className="text-xs text-gray-500">
+                      ({alert.imbalance_data.type}, {alert.imbalance_data.direction}, сила: {alert.imbalance_data.strength.toFixed(1)}%)
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+            
+            <div className="flex items-center space-x-3">
+              <TimeZoneToggle />
+
+              <button
+                onClick={() => setShowTimestampInfo(!showTimestampInfo)}
+                className="text-gray-500 hover:text-gray-700 p-2"
+                title="Информация о формате времени"
+              >
+                <Info className="w-4 h-4" />
+              </button>
+
+              {/* Кнопки торговли */}
+              <button
+                onClick={() => setShowPaperTrading(true)}
+                className="flex items-center space-x-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                <Calculator className="w-4 h-4" />
+                <span>Бумажная</span>
+              </button>
+
+              <button
+                onClick={() => setShowRealTrading(true)}
+                className="flex items-center space-x-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                <DollarSign className="w-4 h-4" />
+                <span>Реальная</span>
+              </button>
+
+              {alert.order_book_snapshot && (
+                <button
+                  onClick={() => setShowOrderBook(true)}
+                  className="flex items-center space-x-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors"
+                >
+                  <BookOpen className="w-4 h-4" />
+                  <span>Стакан</span>
+                </button>
+              )}
+              
+              <button
+                onClick={downloadChart}
+                className="flex items-center space-x-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                <span>Скачать</span>
+              </button>
+              
+              <button
+                onClick={openTradingView}
+                className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                <ExternalLink className="w-4 h-4" />
+                <span>TradingView</span>
+              </button>
+              
+              <button
+                onClick={onClose}
+                className="text-gray-400 hover:text-gray-600 p-2"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+          </div>
+
+          {/* Информация о timestamp */}
+          {showTimestampInfo && (
+            <div className="p-4 bg-blue-50 border-b border-gray-200">
+              <h4 className="font-medium text-blue-900 mb-2">📅 Объяснение формата времени</h4>
+              <div className="text-sm text-blue-700 space-y-2">
+                <p><strong>Все данные хранятся в UTC timestamp (миллисекунды)</strong></p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <p><strong>UTC время:</strong> Единое время для всех данных</p>
+                    <p><strong>Локальное время:</strong> Автоматически учитывает ваш часовой пояс</p>
+                  </div>
+                  <div>
+                    <p><strong>Синхронизация:</strong> С серверами точного времени и биржей</p>
+                    <p><strong>Точность:</strong> До миллисекунд для избежания дублирования</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Chart Content */}
+          <div className="flex-1 p-6 overflow-hidden">
+            {loading ? (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                  <p className="text-gray-600">Загрузка данных графика...</p>
+                </div>
+              </div>
+            ) : error ? (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <p className="text-red-600 mb-4">Ошибка: {error}</p>
+                  <button
+                    onClick={loadChartData}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors mr-2"
+                  >
+                    Попробовать снова
+                  </button>
+                  <button
+                    onClick={openTradingView}
+                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
+                  >
+                    Открыть TradingView
+                  </button>
+                </div>
+              </div>
+            ) : !chartReady ? (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
+                  <p className="text-gray-600">Загрузка библиотеки графиков...</p>
+                </div>
+              </div>
+            ) : chartData.length === 0 ? (
+              <div className="flex items-center justify-center h-full">
+                <p className="text-gray-600">Нет данных для отображения</p>
+              </div>
+            ) : (
+              <div className="h-full">
+                <div 
+                  ref={chartContainerRef} 
+                  className="w-full h-full"
+                  style={{ minHeight: '400px' }}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Alert Info */}
+          <div className="p-6 border-t border-gray-200 bg-gray-50">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div>
+                <span className="text-gray-600">Тип алерта:</span>
+                <span className="ml-2 text-gray-900 font-medium">
+                  {alert.alert_type === 'volume_spike' ? 'Превышение объема' :
+                   alert.alert_type === 'consecutive_long' ? 'LONG последовательность' :
+                   alert.alert_type === 'priority' ? 'Приоритетный' : 'Неизвестный'}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-600">Цена алерта:</span>
+                <span className="ml-2 text-gray-900 font-mono">${alert.price.toFixed(8)}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Время:</span>
+                <span className="ml-2 text-gray-900">
+                  {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-600">Свечей на графике:</span>
+                <span className="ml-2 text-gray-900">{chartData.length}</span>
+              </div>
+            </div>
+            
+            {alert.candle_data && (
+              <div className="mt-4 p-4 bg-white rounded-lg border border-gray-200">
+                <div className="text-sm font-medium text-gray-700 mb-2">Данные свечи алерта (OHLCV):</div>
+                <div className="grid grid-cols-5 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-600">Open:</span>
+                    <div className="text-gray-900 font-mono">${alert.candle_data.open.toFixed(8)}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">High:</span>
+                    <div className="text-gray-900 font-mono">${alert.candle_data.high.toFixed(8)}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Low:</span>
+                    <div className="text-gray-900 font-mono">${alert.candle_data.low.toFixed(8)}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Close:</span>
+                    <div className="text-gray-900 font-mono">${alert.candle_data.close.toFixed(8)}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Volume:</span>
+                    <div className="text-gray-900 font-mono">{alert.candle_data.volume.toFixed(2)}</div>
+                  </div>
+                </div>
+                {alert.candle_data.alert_level && (
+                  <div className="mt-2 text-sm">
+                    <span className="text-gray-600">Уровень алерта:</span>
+                    <span className="ml-2 text-purple-600 font-mono">${alert.candle_data.alert_level.toFixed(8)}</span>
+                  </div>
                 )}
               </div>
             )}
           </div>
-          
-          <div className="flex items-center space-x-3">
-            <TimeZoneToggle />
-
-            <button
-              onClick={() => setShowTimestampInfo(!showTimestampInfo)}
-              className="text-gray-500 hover:text-gray-700 p-2"
-              title="Информация о формате времени"
-            >
-              <Info className="w-4 h-4" />
-            </button>
-
-            {alert.order_book_snapshot && (
-              <button
-                onClick={() => setShowOrderBook(true)}
-                className="flex items-center space-x-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors"
-              >
-                <BookOpen className="w-4 h-4" />
-                <span>Стакан</span>
-              </button>
-            )}
-            
-            <button
-              onClick={downloadChart}
-              className="flex items-center space-x-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
-            >
-              <Download className="w-4 h-4" />
-              <span>Скачать</span>
-            </button>
-            
-            <button
-              onClick={openTradingView}
-              className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
-            >
-              <ExternalLink className="w-4 h-4" />
-              <span>TradingView</span>
-            </button>
-            
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 p-2"
-            >
-              <X className="w-6 h-6" />
-            </button>
-          </div>
         </div>
 
-        {/* Информация о timestamp */}
-        {showTimestampInfo && (
-          <div className="p-4 bg-blue-50 border-b border-gray-200">
-            <h4 className="font-medium text-blue-900 mb-2">📅 Объяснение формата времени</h4>
-            <div className="text-sm text-blue-700 space-y-2">
-              <p><strong>Все данные хранятся в UTC timestamp (миллисекунды)</strong></p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <p><strong>UTC время:</strong> Единое время для всех данных</p>
-                  <p><strong>Локальное время:</strong> Автоматически учитывает ваш часовой пояс</p>
-                </div>
-                <div>
-                  <p><strong>Синхронизация:</strong> С серверами точного времени и биржей</p>
-                  <p><strong>Точность:</strong> До миллисекунд для избежания дублирования</p>
-                </div>
-              </div>
-            </div>
-          </div>
+        {/* Order Book Modal */}
+        {showOrderBook && alert.order_book_snapshot && (
+          <OrderBookModal
+            orderBook={alert.order_book_snapshot}
+            alertPrice={alert.price}
+            symbol={alert.symbol}
+            onClose={() => setShowOrderBook(false)}
+          />
         )}
-
-        {/* Chart Content */}
-        <div className="flex-1 p-6 overflow-hidden">
-          {loading ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-                <p className="text-gray-600">Загрузка данных графика...</p>
-              </div>
-            </div>
-          ) : error ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <p className="text-red-600 mb-4">Ошибка: {error}</p>
-                <button
-                  onClick={loadChartData}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors mr-2"
-                >
-                  Попробовать снова
-                </button>
-                <button
-                  onClick={openTradingView}
-                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
-                >
-                  Открыть TradingView
-                </button>
-              </div>
-            </div>
-          ) : !chartReady ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
-                <p className="text-gray-600">Загрузка библиотеки графиков...</p>
-              </div>
-            </div>
-          ) : chartData.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-gray-600">Нет данных для отображения</p>
-            </div>
-          ) : (
-            <div className="h-full">
-              <div 
-                ref={chartContainerRef} 
-                className="w-full h-full"
-                style={{ minHeight: '400px' }}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Alert Info */}
-        <div className="p-6 border-t border-gray-200 bg-gray-50">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div>
-              <span className="text-gray-600">Тип алерта:</span>
-              <span className="ml-2 text-gray-900 font-medium">
-                {alert.alert_type === 'volume_spike' ? 'Превышение объема' :
-                 alert.alert_type === 'consecutive_long' ? 'LONG последовательность' :
-                 alert.alert_type === 'priority' ? 'Приоритетный' : 'Неизвестный'}
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-600">Цена алерта:</span>
-              <span className="ml-2 text-gray-900 font-mono">${alert.price.toFixed(8)}</span>
-            </div>
-            <div>
-              <span className="text-gray-600">Время:</span>
-              <span className="ml-2 text-gray-900">
-                {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-600">Свечей на графике:</span>
-              <span className="ml-2 text-gray-900">{chartData.length}</span>
-            </div>
-          </div>
-          
-          {/* OHLCV данные свечи алерта */}
-          {alert.candle_data && (
-            <div className="mt-4 p-4 bg-white rounded-lg border border-gray-200">
-              <div className="text-sm font-medium text-gray-700 mb-2">Данные свечи алерта (OHLCV):</div>
-              <div className="grid grid-cols-5 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-600">Open:</span>
-                  <div className="text-gray-900 font-mono">${alert.candle_data.open.toFixed(8)}</div>
-                </div>
-                <div>
-                  <span className="text-gray-600">High:</span>
-                  <div className="text-gray-900 font-mono">${alert.candle_data.high.toFixed(8)}</div>
-                </div>
-                <div>
-                  <span className="text-gray-600">Low:</span>
-                  <div className="text-gray-900 font-mono">${alert.candle_data.low.toFixed(8)}</div>
-                </div>
-                <div>
-                  <span className="text-gray-600">Close:</span>
-                  <div className="text-gray-900 font-mono">${alert.candle_data.close.toFixed(8)}</div>
-                </div>
-                <div>
-                  <span className="text-gray-600">Volume:</span>
-                  <div className="text-gray-900 font-mono">{alert.candle_data.volume.toFixed(2)}</div>
-                </div>
-              </div>
-              {alert.candle_data.alert_level && (
-                <div className="mt-2 text-sm">
-                  <span className="text-gray-600">Уровень алерта:</span>
-                  <span className="ml-2 text-purple-600 font-mono">${alert.candle_data.alert_level.toFixed(8)}</span>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
       </div>
 
-      {/* Order Book Modal */}
-      {showOrderBook && alert.order_book_snapshot && (
-        <OrderBookModal
-          orderBook={alert.order_book_snapshot}
-          alertPrice={alert.price}
+      {/* Модальные окна торговли */}
+      {showPaperTrading && (
+        <PaperTradingModal
           symbol={alert.symbol}
-          onClose={() => setShowOrderBook(false)}
+          alertPrice={alert.price}
+          alertId={alert.id}
+          onClose={() => setShowPaperTrading(false)}
         />
       )}
-    </div>
+
+      {showRealTrading && (
+        <RealTradingModal
+          symbol={alert.symbol}
+          alertPrice={alert.price}
+          alertId={alert.id}
+          onClose={() => setShowRealTrading(false)}
+        />
+      )}
+    </>
   );
 };
 

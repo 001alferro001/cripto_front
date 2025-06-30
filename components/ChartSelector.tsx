@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart3, TrendingUp, Globe, X, Target, AlertCircle, DollarSign } from 'lucide-react';
+import { BarChart3, TrendingUp, Globe, X, Target, AlertCircle, DollarSign, Calculator } from 'lucide-react';
 import TradingViewChart from './TradingViewChart';
 import CoinGeckoChart from './CoinGeckoChart';
 import ChartModal from './ChartModal';
 import PaperTradingModal from './PaperTradingModal';
+import RealTradingModal from './RealTradingModal';
 
 interface Alert {
   id: number;
@@ -26,7 +27,7 @@ interface ChartSelectorProps {
   onClose: () => void;
 }
 
-type ChartType = 'tradingview' | 'coingecko' | 'internal' | 'paper_trading' | null;
+type ChartType = 'tradingview' | 'coingecko' | 'internal' | 'paper_trading' | 'real_trading' | null;
 
 const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
   const [selectedChart, setSelectedChart] = useState<ChartType>(null);
@@ -43,25 +44,21 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
       setLoading(true);
       setError(null);
 
-      // Загружаем все алерты для данного символа за последние 24 часа
       const response = await fetch(`/api/alerts/symbol/${alert.symbol}?hours=24`);
       if (response.ok) {
         const data = await response.json();
         setRelatedAlerts(data.alerts || []);
       } else {
-        // Fallback - загружаем все алерты и фильтруем
         const allResponse = await fetch('/api/alerts/all');
         if (allResponse.ok) {
           const allData = await allResponse.json();
 
-          // Объединяем все типы алертов
           const allAlerts = [
             ...(allData.volume_alerts || []),
             ...(allData.consecutive_alerts || []),
             ...(allData.priority_alerts || [])
           ];
 
-          // Фильтруем по символу и времени (последние 24 часа)
           const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
           const symbolAlerts = allAlerts.filter((a: Alert) => {
             if (a.symbol !== alert.symbol) return false;
@@ -70,7 +67,6 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
             return alertTime > oneDayAgo;
           });
 
-          // Сортируем по времени
           symbolAlerts.sort((a: Alert, b: Alert) => {
             const timeA = typeof a.timestamp === 'number' ? a.timestamp : new Date(a.timestamp).getTime();
             const timeB = typeof b.timestamp === 'number' ? b.timestamp : new Date(b.timestamp).getTime();
@@ -88,14 +84,13 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
     }
   };
 
-  // Исправляем условия рендеринга компонентов
   if (selectedChart === 'tradingview') {
     return (
       <TradingViewChart
         symbol={alert.symbol}
         alertPrice={alert.price}
         alertTime={alert.close_timestamp || alert.timestamp}
-        onClose={() => setSelectedChart(null)} // Возвращаемся к селектору
+        onClose={() => setSelectedChart(null)}
       />
     );
   }
@@ -104,7 +99,7 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
     return (
       <CoinGeckoChart
         symbol={alert.symbol}
-        onClose={() => setSelectedChart(null)} // Возвращаемся к селектору
+        onClose={() => setSelectedChart(null)}
       />
     );
   }
@@ -113,7 +108,7 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
     return (
       <ChartModal
         alert={alert}
-        onClose={() => setSelectedChart(null)} // Возвращаемся к селектору
+        onClose={() => setSelectedChart(null)}
       />
     );
   }
@@ -124,14 +119,25 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
         symbol={alert.symbol}
         alertPrice={alert.price}
         alertId={alert.id}
-        onClose={() => setSelectedChart(null)} // Возвращаемся к селектору
+        onClose={() => setSelectedChart(null)}
+      />
+    );
+  }
+
+  if (selectedChart === 'real_trading') {
+    return (
+      <RealTradingModal
+        symbol={alert.symbol}
+        alertPrice={alert.price}
+        alertId={alert.id}
+        onClose={() => setSelectedChart(null)}
       />
     );
   }
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg w-full max-w-2xl">
+      <div className="bg-white rounded-lg w-full max-w-3xl">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <div>
@@ -172,14 +178,14 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
                 <TrendingUp className="w-6 h-6 text-blue-600" />
               </div>
               <div className="flex-1 text-left">
-                <h3 className="text-lg font-semibold text-gray-900">TradingView с сигналами</h3>
+                <h3 className="text-lg font-semibold text-gray-900">TradingView с торговлей</h3>
                 <p className="text-gray-600">
-                  Профессиональные графики с отметками всех сигналов программы
+                  Профессиональные графики с возможностью торговли
                 </p>
                 <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
                   <span>✓ Реальное время</span>
-                  <span>✓ Сигналы программы</span>
-                  <span>✓ Smart Money зоны</span>
+                  <span>✓ Бумажная торговля</span>
+                  <span>✓ Реальная торговля</span>
                   {!loading && relatedAlerts.length > 0 && (
                     <span className="flex items-center space-x-1 text-blue-600">
                       <Target className="w-3 h-3" />
@@ -192,29 +198,52 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
             </div>
           </button>
 
-          {/* Paper Trading */}
-          <button
-            onClick={() => setSelectedChart('paper_trading')}
-            className="w-full p-6 border-2 border-gray-200 rounded-lg hover:border-green-500 hover:bg-green-50 transition-all group"
-          >
-            <div className="flex items-center space-x-4">
-              <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center group-hover:bg-green-200">
-                <DollarSign className="w-6 h-6 text-green-600" />
-              </div>
-              <div className="flex-1 text-left">
-                <h3 className="text-lg font-semibold text-gray-900">Бумажная торговля</h3>
-                <p className="text-gray-600">
-                  Калькулятор риска и виртуальные сделки без риска реальных денег
-                </p>
-                <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
-                  <span>✓ Расчет риска</span>
-                  <span>✓ Размер позиции</span>
-                  <span>✓ Отслеживание результатов</span>
+          {/* Trading Options */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Paper Trading */}
+            <button
+              onClick={() => setSelectedChart('paper_trading')}
+              className="p-6 border-2 border-gray-200 rounded-lg hover:border-green-500 hover:bg-green-50 transition-all group"
+            >
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center group-hover:bg-green-200">
+                  <Calculator className="w-6 h-6 text-green-600" />
+                </div>
+                <div className="flex-1 text-left">
+                  <h3 className="text-lg font-semibold text-gray-900">Бумажная торговля</h3>
+                  <p className="text-gray-600">
+                    Калькулятор риска и виртуальные сделки
+                  </p>
+                  <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
+                    <span>✓ Расчет риска</span>
+                    <span>✓ Без риска</span>
+                  </div>
                 </div>
               </div>
-              <div className="text-orange-600 font-semibold">Новинка!</div>
-            </div>
-          </button>
+            </button>
+
+            {/* Real Trading */}
+            <button
+              onClick={() => setSelectedChart('real_trading')}
+              className="p-6 border-2 border-gray-200 rounded-lg hover:border-purple-500 hover:bg-purple-50 transition-all group"
+            >
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center group-hover:bg-purple-200">
+                  <DollarSign className="w-6 h-6 text-purple-600" />
+                </div>
+                <div className="flex-1 text-left">
+                  <h3 className="text-lg font-semibold text-gray-900">Реальная торговля</h3>
+                  <p className="text-gray-600">
+                    Выполнение реальных сделок через API
+                  </p>
+                  <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
+                    <span>✓ API Bybit</span>
+                    <span>✓ Реальные деньги</span>
+                  </div>
+                </div>
+              </div>
+            </button>
+          </div>
 
           {/* CoinGecko */}
           <button
@@ -251,12 +280,12 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
               <div className="flex-1 text-left">
                 <h3 className="text-lg font-semibold text-gray-900">Внутренний график</h3>
                 <p className="text-gray-600">
-                  График на основе собранных данных с отметками алертов
+                  График на основе собранных данных с торговлей
                 </p>
                 <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
                   <span>✓ Данные алертов</span>
                   <span>✓ Smart Money зоны</span>
-                  <span>✓ Стакан заявок</span>
+                  <span>✓ Торговля</span>
                 </div>
               </div>
             </div>
@@ -267,17 +296,17 @@ const ChartSelector: React.FC<ChartSelectorProps> = ({ alert, onClose }) => {
         <div className="p-6 border-t border-gray-200 bg-gray-50">
           <div className="text-sm text-gray-600">
             <p className="mb-2">
-              <strong>🎯 Новая функция:</strong> Бумажная торговля позволяет практиковаться без риска реальных денег!
+              <strong>🎯 Новые возможности:</strong> Торговля доступна из всех графиков!
             </p>
             <div className="grid grid-cols-3 gap-4 text-xs">
               <div>
-                <span className="text-green-600">💰 Калькулятор риска</span> - оптимальный размер позиции
+                <span className="text-green-600">💰 Бумажная торговля</span> - практика без риска
               </div>
               <div>
-                <span className="text-blue-600">📊 Отслеживание сделок</span> - статистика и результаты
+                <span className="text-purple-600">💸 Реальная торговля</span> - через API Bybit
               </div>
               <div>
-                <span className="text-purple-600">🎓 Обучение</span> - без риска реальных денег
+                <span className="text-blue-600">📊 Калькулятор риска</span> - во всех режимах
               </div>
             </div>
           </div>
