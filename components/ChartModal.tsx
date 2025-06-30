@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, ExternalLink, Download, BookOpen, Info, Calculator, DollarSign, Clock } from 'lucide-react';
+import { X, ExternalLink, Download, BookOpen, Info, Calculator, DollarSign, Clock, AlertTriangle, Target } from 'lucide-react';
 import OrderBookModal from './OrderBookModal';
 import TimeZoneToggle from './TimeZoneToggle';
 import PaperTradingModal from './PaperTradingModal';
@@ -74,7 +74,8 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
   const [showPaperTrading, setShowPaperTrading] = useState(false);
   const [showRealTrading, setShowRealTrading] = useState(false);
   const [chartReady, setChartReady] = useState(false);
-  const [dataSource, setDataSource] = useState<'api' | 'mock'>('api');
+  const [dataSource, setDataSource] = useState<'database' | 'mock'>('database');
+  const [alertVisible, setAlertVisible] = useState(true);
   
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
@@ -87,7 +88,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
     // Параллельная загрузка скрипта и данных
     Promise.all([
       loadLightweightChartsScript(),
-      loadChartData()
+      loadChartDataFromDatabase()
     ]).catch(console.error);
     
     return () => {
@@ -103,33 +104,136 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
     }
   }, [chartReady, chartData]);
 
+  const loadChartDataFromDatabase = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Загружаем все доступные данные для данного символа из базы данных
+      const response = await fetch(`/api/chart-data/${alert.symbol}/database`, {
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const candleData = data.chart_data || data.data || data || [];
+        
+        if (candleData.length > 0) {
+          setChartData(candleData);
+          setDataSource('database');
+          
+          // Проверяем, виден ли сигнал на графике
+          const alertTimestamp = typeof alert.timestamp === 'number' 
+            ? alert.timestamp 
+            : new Date(alert.timestamp).getTime();
+          
+          const alertCloseTimestamp = alert.close_timestamp 
+            ? (typeof alert.close_timestamp === 'number' 
+                ? alert.close_timestamp 
+                : new Date(alert.close_timestamp).getTime())
+            : alertTimestamp;
+
+          // Находим временные границы данных
+          const dataStartTime = Math.min(...candleData.map(d => d.timestamp));
+          const dataEndTime = Math.max(...candleData.map(d => d.timestamp));
+          
+          // Проверяем, попадает ли сигнал в диапазон данных
+          const signalInRange = alertCloseTimestamp >= dataStartTime && alertCloseTimestamp <= dataEndTime;
+          setAlertVisible(signalInRange);
+          
+          console.log(`📊 Загружено ${candleData.length} свечей из базы данных для ${alert.symbol}`);
+          console.log(`🎯 Сигнал ${signalInRange ? 'виден' : 'не виден'} на графике`);
+          console.log(`📅 Диапазон данных: ${new Date(dataStartTime).toISOString()} - ${new Date(dataEndTime).toISOString()}`);
+          console.log(`🚨 Время сигнала: ${new Date(alertCloseTimestamp).toISOString()}`);
+        } else {
+          // Если нет данных в базе, генерируем mock данные
+          console.warn('Нет данных в базе, используем mock данные');
+          const mockData = generateMockData();
+          setChartData(mockData);
+          setDataSource('mock');
+          setAlertVisible(true);
+        }
+      } else {
+        throw new Error(`API вернул статус ${response.status}`);
+      }
+    } catch (error) {
+      console.error('Ошибка загрузки данных из базы:', error);
+      // В случае ошибки используем mock данные
+      const mockData = generateMockData();
+      setChartData(mockData);
+      setDataSource('mock');
+      setAlertVisible(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const generateMockData = () => {
-    const now = Date.now();
+    const alertTimestamp = typeof alert.timestamp === 'number' 
+      ? alert.timestamp 
+      : new Date(alert.timestamp).getTime();
+    
+    const alertCloseTimestamp = alert.close_timestamp 
+      ? (typeof alert.close_timestamp === 'number' 
+          ? alert.close_timestamp 
+          : new Date(alert.close_timestamp).getTime())
+      : alertTimestamp;
+
     const data = [];
     let price = alert.price || 50000;
     
-    // Генерируем 120 свечей за последние 2 часа
-    for (let i = 119; i >= 0; i--) {
-      const timestamp = now - (i * 60 * 1000); // каждая свеча = 1 минута
-      const change = (Math.random() - 0.5) * price * 0.02; // изменение до 2%
-      const open = price;
-      const close = price + change;
-      const high = Math.max(open, close) + Math.random() * price * 0.01;
-      const low = Math.min(open, close) - Math.random() * price * 0.01;
-      const volume = Math.random() * 1000000;
+    // Генерируем 120 свечей: 60 до сигнала и 60 после
+    const signalCandleIndex = 60;
+    const startTime = alertCloseTimestamp - (signalCandleIndex * 60 * 1000);
+    
+    for (let i = 0; i < 120; i++) {
+      const timestamp = startTime + (i * 60 * 1000);
       
-      data.push({
-        timestamp,
-        open,
-        high,
-        low,
-        close,
-        volume,
-        volume_usdt: volume * price,
-        is_long: close > open
-      });
-      
-      price = close;
+      // Если это свеча сигнала, используем точную цену
+      if (i === signalCandleIndex) {
+        const open = price;
+        const close = alert.price;
+        const high = Math.max(open, close) + Math.abs(close - open) * 0.1;
+        const low = Math.min(open, close) - Math.abs(close - open) * 0.1;
+        const volume = Math.random() * 2000000; // Увеличенный объем для сигнала
+        
+        data.push({
+          timestamp,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          volume_usdt: volume * close,
+          is_long: close > open
+        });
+        
+        price = close;
+      } else {
+        // Обычные свечи с небольшими изменениями
+        const change = (Math.random() - 0.5) * price * 0.015; // изменение до 1.5%
+        const open = price;
+        const close = price + change;
+        const high = Math.max(open, close) + Math.random() * price * 0.005;
+        const low = Math.min(open, close) - Math.random() * price * 0.005;
+        const volume = Math.random() * 1000000;
+        
+        data.push({
+          timestamp,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          volume_usdt: volume * close,
+          is_long: close > open
+        });
+        
+        price = close;
+      }
     }
     
     return data;
@@ -175,60 +279,6 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
     });
 
     return chartScriptPromise;
-  };
-
-  const loadChartData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const alertTime = alert.close_timestamp || alert.timestamp;
-      
-      let data = [];
-
-      // Сначала пробуем загрузить данные с API
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
-
-        const response = await fetch(`/api/chart-data/${alert.symbol}?hours=2&alert_time=${alertTime}`, {
-          signal: controller.signal,
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        clearTimeout(timeoutId);
-        
-        if (response.ok) {
-          const responseData = await response.json();
-          data = responseData.chart_data || responseData.data || responseData || [];
-          setDataSource('api');
-          console.log(`Загружено ${data.length} свечей для ${alert.symbol} с API`);
-        } else {
-          throw new Error(`API вернул статус ${response.status}`);
-        }
-      } catch (apiError) {
-        console.warn('Ошибка загрузки с API, используем mock данные:', apiError);
-        data = generateMockData();
-        setDataSource('mock');
-      }
-
-      setChartData(data);
-    } catch (err) {
-      if (err.name === 'AbortError') {
-        console.log('Chart data request was aborted');
-        return;
-      }
-      console.error('Ошибка загрузки данных:', err);
-      // В случае ошибки используем mock данные
-      const mockData = generateMockData();
-      setChartData(mockData);
-      setDataSource('mock');
-    } finally {
-      setLoading(false);
-    }
   };
 
   const createChart = () => {
@@ -294,6 +344,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
         },
       });
 
+      // Подготавливаем данные для графика
       const candleData = chartData.map(item => ({
         time: Math.floor(item.timestamp / 1000),
         open: item.open,
@@ -311,13 +362,32 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       candlestickSeries.setData(candleData);
       volumeSeries.setData(volumeData);
 
-      addAlertMarkers(candlestickSeries);
+      // Добавляем маркеры алертов только если сигнал виден
+      if (alertVisible) {
+        addAlertMarkers(candlestickSeries);
+      }
 
+      // Добавляем зоны имбаланса если есть
       if (alert.has_imbalance && alert.imbalance_data) {
         addImbalanceZones(chart);
       }
 
+      // Подгоняем график под данные
       chart.timeScale().fitContent();
+
+      // Если сигнал виден, центрируем на нем
+      if (alertVisible) {
+        const alertTimestamp = alert.close_timestamp || alert.timestamp;
+        const alertTime = Math.floor((typeof alertTimestamp === 'number' ? alertTimestamp : new Date(alertTimestamp).getTime()) / 1000);
+        
+        // Устанавливаем видимый диапазон вокруг сигнала
+        const visibleRange = {
+          from: alertTime - 1800, // 30 минут до
+          to: alertTime + 1800     // 30 минут после
+        };
+        
+        chart.timeScale().setVisibleRange(visibleRange);
+      }
 
       // Оптимизированный ResizeObserver
       let resizeTimeout: NodeJS.Timeout;
@@ -330,7 +400,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
         resizeTimeout = setTimeout(() => {
           const newRect = entries[0].contentRect;
           chart.applyOptions({ width: newRect.width, height: newRect.height });
-        }, 100); // Дебаунс для производительности
+        }, 100);
       });
 
       if (chartContainerRef.current) {
@@ -353,16 +423,29 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       position: 'aboveBar',
       color: '#f68410',
       shape: 'circle',
-      text: `🎯 Alert: $${alert.price.toFixed(6)}`,
+      text: `🎯 ${alert.alert_type}: $${alert.price.toFixed(6)}`,
     }];
 
+    // Добавляем маркер предварительного алерта если есть
+    if (alert.preliminary_alert) {
+      const prelimTime = Math.floor((typeof alert.preliminary_alert.timestamp === 'number' ? alert.preliminary_alert.timestamp : new Date(alert.preliminary_alert.timestamp).getTime()) / 1000);
+      markers.push({
+        time: prelimTime,
+        position: 'belowBar',
+        color: '#ff9800',
+        shape: 'square',
+        text: `⚠️ Предварительный: $${alert.preliminary_alert.price.toFixed(6)}`,
+      });
+    }
+
+    // Добавляем маркер уровня алерта если есть
     if (alert.candle_data?.alert_level) {
       markers.push({
         time: alertTimestamp,
         position: 'belowBar',
         color: '#9c27b0',
         shape: 'square',
-        text: `Level: $${alert.candle_data.alert_level.toFixed(6)}`,
+        text: `📊 Уровень: $${alert.candle_data.alert_level.toFixed(6)}`,
       });
     }
 
@@ -389,17 +472,18 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       title: `${alert.imbalance_data.type.toUpperCase()} Bottom`,
     });
 
-    const startTime = alertTimestamp - 300;
-    const endTime = alertTimestamp + 300;
+    // Показываем зону имбаланса на всем видимом диапазоне
+    const dataStartTime = Math.min(...chartData.map(d => Math.floor(d.timestamp / 1000)));
+    const dataEndTime = Math.max(...chartData.map(d => Math.floor(d.timestamp / 1000)));
 
     imbalanceTopSeries.setData([
-      { time: startTime, value: alert.imbalance_data.top },
-      { time: endTime, value: alert.imbalance_data.top },
+      { time: dataStartTime, value: alert.imbalance_data.top },
+      { time: dataEndTime, value: alert.imbalance_data.top },
     ]);
 
     imbalanceBottomSeries.setData([
-      { time: startTime, value: alert.imbalance_data.bottom },
-      { time: endTime, value: alert.imbalance_data.bottom },
+      { time: dataStartTime, value: alert.imbalance_data.bottom },
+      { time: dataEndTime, value: alert.imbalance_data.bottom },
     ]);
   };
 
@@ -436,11 +520,23 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
               <h2 className="text-2xl font-bold text-gray-900">{alert.symbol}</h2>
               <div className="flex items-center space-x-4 mt-1">
                 <p className="text-gray-600">
-                  График с данными • Алерт: {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
+                  Внутренний график • Алерт: {formatTime(alert.close_timestamp || alert.timestamp, timeZone)}
                 </p>
-                {dataSource === 'mock' && (
-                  <span className="text-sm text-yellow-600 bg-yellow-100 px-2 py-1 rounded">
-                    Demo данные
+                <span className={`text-sm px-2 py-1 rounded ${
+                  dataSource === 'database' ? 'text-green-600 bg-green-100' : 'text-yellow-600 bg-yellow-100'
+                }`}>
+                  {dataSource === 'database' ? 'Данные из БД' : 'Demo данные'}
+                </span>
+                {!alertVisible && (
+                  <span className="text-sm text-orange-600 bg-orange-100 px-2 py-1 rounded flex items-center">
+                    <AlertTriangle className="w-3 h-3 mr-1" />
+                    Сигнал вне диапазона
+                  </span>
+                )}
+                {alertVisible && (
+                  <span className="text-sm text-blue-600 bg-blue-100 px-2 py-1 rounded flex items-center">
+                    <Target className="w-3 h-3 mr-1" />
+                    Сигнал виден
                   </span>
                 )}
               </div>
@@ -462,7 +558,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
               <button
                 onClick={() => setShowTimestampInfo(!showTimestampInfo)}
                 className="text-gray-500 hover:text-gray-700 p-2"
-                title="Информация о формате времени"
+                title="Информация о данных"
               >
                 <Info className="w-4 h-4" />
               </button>
@@ -519,22 +615,29 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
             </div>
           </div>
 
-          {/* Информация о timestamp */}
+          {/* Информация о данных */}
           {showTimestampInfo && (
             <div className="p-4 bg-blue-50 border-b border-gray-200">
-              <h4 className="font-medium text-blue-900 mb-2">📅 Объяснение формата времени</h4>
+              <h4 className="font-medium text-blue-900 mb-2">📊 Информация о данных графика</h4>
               <div className="text-sm text-blue-700 space-y-2">
-                <p><strong>Все данные хранятся в UTC timestamp (миллисекунды)</strong></p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <p><strong>UTC время:</strong> Единое время для всех данных</p>
-                    <p><strong>Локальное время:</strong> Автоматически учитывает ваш часовой пояс</p>
+                    <p><strong>Источник данных:</strong> {dataSource === 'database' ? 'База данных системы' : 'Демонстрационные данные'}</p>
+                    <p><strong>Количество свечей:</strong> {chartData.length}</p>
+                    <p><strong>Интервал:</strong> 1 минута</p>
                   </div>
                   <div>
-                    <p><strong>Синхронизация:</strong> С серверами точного времени и биржей</p>
-                    <p><strong>Точность:</strong> До миллисекунд для избежания дублирования</p>
+                    <p><strong>Диапазон данных:</strong> {chartData.length > 0 ? 
+                      `${formatTime(Math.min(...chartData.map(d => d.timestamp)), timeZone, { includeDate: false })} - ${formatTime(Math.max(...chartData.map(d => d.timestamp)), timeZone, { includeDate: false })}` : 
+                      'Нет данных'}</p>
+                    <p><strong>Сигнал:</strong> {alertVisible ? '✅ Виден на графике' : '❌ Вне диапазона данных'}</p>
                   </div>
                 </div>
+                {!alertVisible && (
+                  <div className="mt-3 p-3 bg-orange-100 rounded">
+                    <p className="text-orange-800"><strong>⚠️ Сигнал не виден:</strong> Время сигнала выходит за границы доступных данных в базе. График показывает все доступные данные для данного актива.</p>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -545,9 +648,9 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
               <div className="flex items-center justify-center h-full">
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-                  <p className="text-gray-600">Загрузка данных графика...</p>
+                  <p className="text-gray-600">Загрузка данных из базы...</p>
                   <p className="text-xs text-gray-500 mt-2">
-                    {dataSource === 'mock' ? 'Используются demo данные' : 'Загрузка с API'}
+                    Получение минутных свечей для {alert.symbol}
                   </p>
                 </div>
               </div>
@@ -556,7 +659,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
                 <div className="text-center">
                   <p className="text-red-600 mb-4">Ошибка: {error}</p>
                   <button
-                    onClick={loadChartData}
+                    onClick={loadChartDataFromDatabase}
                     className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors mr-2"
                   >
                     Попробовать снова
@@ -578,7 +681,11 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
               </div>
             ) : chartData.length === 0 ? (
               <div className="flex items-center justify-center h-full">
-                <p className="text-gray-600">Нет данных для отображения</p>
+                <div className="text-center">
+                  <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-4" />
+                  <p className="text-gray-600">Нет данных для отображения</p>
+                  <p className="text-sm text-gray-500 mt-2">В базе данных нет свечей для {alert.symbol}</p>
+                </div>
               </div>
             ) : (
               <div className="h-full">
@@ -656,8 +763,9 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
             {/* Информация об источнике данных */}
             <div className="mt-4 text-xs text-gray-500 flex justify-between items-center">
               <span>
-                Источник данных: {dataSource === 'api' ? '🌐 API Backend' : '🎭 Demo данные'} • 
-                Powered by Lightweight Charts
+                Источник данных: {dataSource === 'database' ? '🗄️ База данных системы' : '🎭 Demo данные'} • 
+                Powered by Lightweight Charts • 
+                {alertVisible ? '🎯 Сигнал отображен' : '⚠️ Сигнал вне диапазона'}
               </span>
               <span>Часовой пояс: {timeZone === 'UTC' ? 'UTC' : 'Локальное время'}</span>
             </div>
