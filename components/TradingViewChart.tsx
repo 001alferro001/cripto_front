@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator, TrendingUp, TrendingDown, Clock, BarChart3, Globe } from 'lucide-react';
+import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator, TrendingUp, TrendingDown, Clock, BarChart3, Globe, BarChart2, Activity } from 'lucide-react';
 import PaperTradingModal from './PaperTradingModal';
 import RealTradingModal from './RealTradingModal';
 import CoinGeckoChart from './CoinGeckoChart';
@@ -13,6 +13,7 @@ interface TradingViewChartProps {
   alertTime?: number | string;
   alerts?: any[];
   onClose: () => void;
+  onError?: () => void;
   theme?: 'light' | 'dark';
 }
 
@@ -35,6 +36,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   alertTime,
   alerts = [],
   onClose,
+  onError,
   theme = 'light'
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -56,6 +58,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const [chartLibrary, setChartLibrary] = useState<'lightweight' | 'chartjs' | 'fallback'>('lightweight');
   const [showFallbackOptions, setShowFallbackOptions] = useState(false);
   
+  // Новые состояния для типов графиков
+  const [chartType, setChartType] = useState<'candlestick' | 'line' | 'bar'>('candlestick');
+  const [showVolume, setShowVolume] = useState(true);
+  
   const { timeZone } = useTimeZone();
 
   useEffect(() => {
@@ -73,6 +79,17 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       loadChartData();
     }
   }, [symbol, interval]);
+
+  // Пересоздаем график при изменении типа
+  useEffect(() => {
+    if (chartData.length > 0 && mountedRef.current) {
+      if (chartLibrary === 'lightweight') {
+        createLightweightChart(chartData);
+      } else if (chartLibrary === 'chartjs') {
+        createChartJsChart(chartData);
+      }
+    }
+  }, [chartType, showVolume]);
 
   const initializeChart = async () => {
     try {
@@ -98,6 +115,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           setChartLibrary('fallback');
           setShowFallbackOptions(true);
           setError('Библиотеки графиков недоступны. Используйте альтернативные варианты.');
+          if (onError) onError();
         }
       }
       
@@ -109,6 +127,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
         setError('Ошибка инициализации графиков');
         setShowFallbackOptions(true);
         setIsLoading(false);
+        if (onError) onError();
       }
     }
   };
@@ -380,64 +399,89 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
       chartRef.current = chart;
 
-      // Добавляем серию свечей
-      const candlestickSeries = chart.addCandlestickSeries({
-        upColor: '#26a69a',
-        downColor: '#ef5350',
-        borderVisible: false,
-        wickUpColor: '#26a69a',
-        wickDownColor: '#ef5350',
-      });
+      // Добавляем серию в зависимости от типа графика
+      let mainSeries;
+      if (chartType === 'candlestick') {
+        mainSeries = chart.addCandlestickSeries({
+          upColor: '#26a69a',
+          downColor: '#ef5350',
+          borderVisible: false,
+          wickUpColor: '#26a69a',
+          wickDownColor: '#ef5350',
+        });
+      } else if (chartType === 'line') {
+        mainSeries = chart.addLineSeries({
+          color: '#2196f3',
+          lineWidth: 2,
+        });
+      } else { // bar
+        mainSeries = chart.addHistogramSeries({
+          color: '#2196f3',
+        });
+      }
 
-      candlestickSeriesRef.current = candlestickSeries;
+      candlestickSeriesRef.current = mainSeries;
 
-      // Добавляем серию объемов
-      const volumeSeries = chart.addHistogramSeries({
-        color: '#26a69a',
-        priceFormat: {
-          type: 'volume',
-        },
-        priceScaleId: 'volume',
-      });
+      // Добавляем серию объемов если включена
+      if (showVolume) {
+        const volumeSeries = chart.addHistogramSeries({
+          color: '#26a69a',
+          priceFormat: {
+            type: 'volume',
+          },
+          priceScaleId: 'volume',
+        });
 
-      volumeSeriesRef.current = volumeSeries;
+        volumeSeriesRef.current = volumeSeries;
 
-      // Настраиваем шкалу объемов
-      chart.priceScale('volume').applyOptions({
-        scaleMargins: {
-          top: 0.7,
-          bottom: 0,
-        },
-      });
+        // Настраиваем шкалу объемов
+        chart.priceScale('volume').applyOptions({
+          scaleMargins: {
+            top: 0.7,
+            bottom: 0,
+          },
+        });
+      }
 
       // Подготавливаем данные для графика
       if (data && data.length > 0) {
-        const candleData = data.map(item => ({
-          time: Math.floor((item.timestamp || Date.now()) / 1000),
-          open: Number(item.open) || 0,
-          high: Number(item.high) || 0,
-          low: Number(item.low) || 0,
-          close: Number(item.close) || 0,
-        })).filter(item => item.open > 0 && item.high > 0 && item.low > 0 && item.close > 0);
-
-        const volumeData = data.map(item => ({
-          time: Math.floor((item.timestamp || Date.now()) / 1000),
-          value: Number(item.volume_usdt || item.volume) || 0,
-          color: item.is_long ? '#26a69a' : '#ef5350',
-        })).filter(item => item.value > 0);
-
-        if (candleData.length > 0) {
-          candlestickSeries.setData(candleData);
-          console.log('Установлены данные свечей:', candleData.length);
+        let mainData;
+        
+        if (chartType === 'candlestick') {
+          mainData = data.map(item => ({
+            time: Math.floor((item.timestamp || Date.now()) / 1000),
+            open: Number(item.open) || 0,
+            high: Number(item.high) || 0,
+            low: Number(item.low) || 0,
+            close: Number(item.close) || 0,
+          })).filter(item => item.open > 0 && item.high > 0 && item.low > 0 && item.close > 0);
+        } else {
+          mainData = data.map(item => ({
+            time: Math.floor((item.timestamp || Date.now()) / 1000),
+            value: Number(item.close) || 0,
+          })).filter(item => item.value > 0);
         }
 
-        if (volumeData.length > 0) {
-          volumeSeries.setData(volumeData);
-          console.log('Установлены данные объемов:', volumeData.length);
+        if (showVolume) {
+          const volumeData = data.map(item => ({
+            time: Math.floor((item.timestamp || Date.now()) / 1000),
+            value: Number(item.volume_usdt || item.volume) || 0,
+            color: item.is_long ? '#26a69a' : '#ef5350',
+          })).filter(item => item.value > 0);
+
+          if (volumeData.length > 0 && volumeSeriesRef.current) {
+            volumeSeriesRef.current.setData(volumeData);
+            console.log('Установлены данные объемов:', volumeData.length);
+          }
+        }
+
+        if (mainData.length > 0) {
+          mainSeries.setData(mainData);
+          console.log('Установлены основные данные:', mainData.length);
         }
 
         // Добавляем маркеры алертов
-        addAlertMarkers(candlestickSeries);
+        addAlertMarkers(mainSeries);
 
         // Подгоняем график под данные
         chart.timeScale().fitContent();
@@ -507,35 +551,84 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
         return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
       });
 
-      const prices = data.map(item => item.close);
-      const volumes = data.map(item => item.volume_usdt || item.volume);
+      const datasets = [];
+
+      // Основной датасет в зависимости от типа графика
+      if (chartType === 'candlestick') {
+        // Для свечного графика используем комбинацию линий
+        datasets.push(
+          {
+            label: 'High',
+            data: data.map(item => item.high),
+            borderColor: 'rgba(76, 175, 80, 0.8)',
+            backgroundColor: 'rgba(76, 175, 80, 0.1)',
+            borderWidth: 1,
+            fill: false,
+            pointRadius: 0,
+            yAxisID: 'y'
+          },
+          {
+            label: 'Low',
+            data: data.map(item => item.low),
+            borderColor: 'rgba(244, 67, 54, 0.8)',
+            backgroundColor: 'rgba(244, 67, 54, 0.1)',
+            borderWidth: 1,
+            fill: false,
+            pointRadius: 0,
+            yAxisID: 'y'
+          },
+          {
+            label: 'Close',
+            data: data.map(item => item.close),
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            borderWidth: 3,
+            fill: false,
+            tension: 0.1,
+            yAxisID: 'y'
+          }
+        );
+      } else if (chartType === 'line') {
+        datasets.push({
+          label: 'Цена (USD)',
+          data: data.map(item => item.close),
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59, 130, 246, 0.1)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.1,
+          yAxisID: 'y'
+        });
+      } else { // bar
+        datasets.push({
+          label: 'Цена (USD)',
+          data: data.map(item => item.close),
+          backgroundColor: data.map(item => item.is_long ? 'rgba(76, 175, 80, 0.8)' : 'rgba(244, 67, 54, 0.8)'),
+          borderColor: data.map(item => item.is_long ? 'rgba(76, 175, 80, 1)' : 'rgba(244, 67, 54, 1)'),
+          borderWidth: 1,
+          yAxisID: 'y'
+        });
+      }
+
+      // Добавляем объемы если включены
+      if (showVolume) {
+        datasets.push({
+          label: 'Объем (USD)',
+          data: data.map(item => item.volume_usdt || item.volume),
+          type: 'bar',
+          backgroundColor: 'rgba(16, 185, 129, 0.3)',
+          borderColor: 'rgba(16, 185, 129, 0.8)',
+          borderWidth: 1,
+          yAxisID: 'y1'
+        });
+      }
 
       // Создаем график
       chartRef.current = new window.Chart(ctx, {
-        type: 'line',
+        type: chartType === 'bar' ? 'bar' : 'line',
         data: {
           labels,
-          datasets: [
-            {
-              label: 'Цена (USD)',
-              data: prices,
-              borderColor: '#3b82f6',
-              backgroundColor: 'rgba(59, 130, 246, 0.1)',
-              borderWidth: 2,
-              fill: true,
-              tension: 0.1,
-              yAxisID: 'y'
-            },
-            {
-              label: 'Объем (USD)',
-              data: volumes,
-              type: 'bar',
-              backgroundColor: 'rgba(16, 185, 129, 0.3)',
-              borderColor: 'rgba(16, 185, 129, 0.8)',
-              borderWidth: 1,
-              yAxisID: 'y1'
-            }
-          ]
+          datasets
         },
         options: {
           responsive: true,
@@ -547,7 +640,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           plugins: {
             title: {
               display: true,
-              text: `${symbol} - Chart.js (Альтернативный график)`,
+              text: `${symbol} - ${chartType === 'candlestick' ? 'Свечной' : chartType === 'line' ? 'Линейный' : 'Столбчатый'} график (Chart.js)`,
               font: {
                 size: 16,
                 weight: 'bold'
@@ -560,10 +653,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
             tooltip: {
               callbacks: {
                 label: function(context) {
-                  if (context.datasetIndex === 0) {
-                    return `Цена: $${context.parsed.y.toLocaleString()}`;
-                  } else {
+                  if (context.dataset.label?.includes('Объем')) {
                     return `Объем: $${(context.parsed.y / 1000000).toFixed(2)}M`;
+                  } else {
+                    return `${context.dataset.label}: $${context.parsed.y.toLocaleString()}`;
                   }
                 }
               }
@@ -591,23 +684,25 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 }
               }
             },
-            y1: {
-              type: 'linear',
-              display: true,
-              position: 'right',
-              title: {
+            ...(showVolume && {
+              y1: {
+                type: 'linear',
                 display: true,
-                text: 'Объем (USD)'
-              },
-              grid: {
-                drawOnChartArea: false,
-              },
-              ticks: {
-                callback: function(value) {
-                  return '$' + (Number(value) / 1000000).toFixed(1) + 'M';
+                position: 'right',
+                title: {
+                  display: true,
+                  text: 'Объем (USD)'
+                },
+                grid: {
+                  drawOnChartArea: false,
+                },
+                ticks: {
+                  callback: function(value) {
+                    return '$' + (Number(value) / 1000000).toFixed(1) + 'M';
+                  }
                 }
               }
-            }
+            })
           }
         }
       });
@@ -660,7 +755,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
       }
     });
 
-    if (markers.length > 0) {
+    if (markers.length > 0 && series.setMarkers) {
       series.setMarkers(markers);
       console.log('Добавлены маркеры алертов:', markers.length);
     }
@@ -755,6 +850,12 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     { value: '1d', label: '1д' }
   ];
 
+  const chartTypes = [
+    { value: 'candlestick', label: 'Свечи', icon: BarChart3 },
+    { value: 'line', label: 'Линия', icon: Activity },
+    { value: 'bar', label: 'Столбцы', icon: BarChart2 }
+  ];
+
   return (
     <>
       <div className={`fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 ${
@@ -836,6 +937,44 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                   <span>SHORT</span>
                 </button>
               </div>
+
+              {/* Тип графика (только для Chart.js) */}
+              {chartLibrary === 'chartjs' && (
+                <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
+                  {chartTypes.map((type) => {
+                    const Icon = type.icon;
+                    return (
+                      <button
+                        key={type.value}
+                        onClick={() => setChartType(type.value as any)}
+                        className={`flex items-center space-x-1 px-2 py-1 text-xs rounded transition-colors ${
+                          chartType === type.value
+                            ? 'bg-purple-600 text-white'
+                            : 'text-gray-600 hover:bg-gray-200'
+                        }`}
+                        title={type.label}
+                      >
+                        <Icon className="w-3 h-3" />
+                        <span className="hidden sm:inline">{type.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Переключатель объемов (только для Chart.js) */}
+              {chartLibrary === 'chartjs' && (
+                <button
+                  onClick={() => setShowVolume(!showVolume)}
+                  className={`px-2 py-1 text-xs rounded transition-colors ${
+                    showVolume
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                  }`}
+                >
+                  Объемы
+                </button>
+              )}
 
               {/* Интервалы */}
               <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
@@ -921,14 +1060,26 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                       <div className="mt-4 space-y-2">
                         <p className="text-sm text-gray-600">Альтернативные варианты:</p>
                         <div className="space-x-2">
-                          <CoinGeckoChart symbol={symbol} onClose={onClose} />
-                          <ChartModal alert={{
-                            id: 0,
-                            symbol,
-                            alert_type: 'fallback',
-                            price: alertPrice || 0,
-                            timestamp: alertTime || Date.now()
-                          }} onClose={onClose} />
+                          <button
+                            onClick={() => {
+                              onClose();
+                              // Здесь можно открыть CoinGecko
+                            }}
+                            className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded text-sm transition-colors"
+                          >
+                            <Globe className="w-4 h-4 inline mr-1" />
+                            CoinGecko
+                          </button>
+                          <button
+                            onClick={() => {
+                              onClose();
+                              // Здесь можно открыть внутренний график
+                            }}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded text-sm transition-colors"
+                          >
+                            <BarChart3 className="w-4 h-4 inline mr-1" />
+                            Внутренний
+                          </button>
                         </div>
                       </div>
                     )}
@@ -954,7 +1105,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
               <span>
                 Данные: {dataSource === 'api' ? 'API Backend' : 'Demo данные'} • 
                 График: {chartLibrary === 'lightweight' ? 'Lightweight Charts' :
-                         chartLibrary === 'chartjs' ? 'Chart.js' : 'Fallback'}
+                         chartLibrary === 'chartjs' ? `Chart.js (${chartType === 'candlestick' ? 'Свечи' : chartType === 'line' ? 'Линия' : 'Столбцы'})` : 'Fallback'}
               </span>
               <div className="flex items-center space-x-4">
                 <span>📈 LONG: прибыль при росте</span>
