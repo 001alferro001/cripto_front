@@ -85,7 +85,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
   useEffect(() => {
     // Параллельная загрузка скрипта и данных
     Promise.all([
-      loadTradingViewScript(),
+      loadLightweightChartsScript(),
       loadChartData()
     ]).catch(console.error);
     
@@ -102,7 +102,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
     }
   }, [chartReady, chartData]);
 
-  const loadTradingViewScript = async (): Promise<void> => {
+  const loadLightweightChartsScript = async (): Promise<void> => {
     if (window.LightweightCharts) {
       setChartReady(true);
       return Promise.resolve();
@@ -123,7 +123,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       script.async = true;
       
       script.onload = () => {
-        console.log('TradingView Lightweight Charts loaded successfully');
+        console.log('Lightweight Charts loaded successfully');
         chartScriptLoaded = true;
         setChartReady(true);
         setError(null);
@@ -131,7 +131,7 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
       };
       
       script.onerror = () => {
-        console.error('Failed to load TradingView Lightweight Charts');
+        console.error('Failed to load Lightweight Charts');
         setError('Ошибка загрузки библиотеки графиков');
         setChartReady(false);
         chartScriptPromise = null;

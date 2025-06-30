@@ -7,41 +7,44 @@ interface TradingViewChartProps {
   symbol: string;
   alertPrice?: number;
   alertTime?: number | string;
+  alerts?: any[];
   onClose: () => void;
   theme?: 'light' | 'dark';
 }
 
 declare global {
   interface Window {
-    TradingView: any;
+    LightweightCharts: any;
   }
 }
 
-// Глобальное состояние для управления скриптом TradingView
-let tradingViewScriptLoaded = false;
-let tradingViewScriptPromise: Promise<void> | null = null;
-let widgetCounter = 0;
+// Глобальное состояние для управления скриптом Lightweight Charts
+let lightweightChartsLoaded = false;
+let lightweightChartsPromise: Promise<void> | null = null;
 
 const TradingViewChart: React.FC<TradingViewChartProps> = ({ 
   symbol, 
   alertPrice, 
-  alertTime, 
+  alertTime,
+  alerts = [],
   onClose,
   theme = 'light'
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const widgetRef = useRef<any>(null);
+  const chartRef = useRef<any>(null);
+  const candlestickSeriesRef = useRef<any>(null);
+  const volumeSeriesRef = useRef<any>(null);
   const mountedRef = useRef(true);
+  
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [interval, setInterval] = useState('1');
-  const [chartType, setChartType] = useState('1');
+  const [interval, setInterval] = useState('1m');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [showPaperTrading, setShowPaperTrading] = useState(false);
   const [showRealTrading, setShowRealTrading] = useState(false);
   const [tradingDirection, setTradingDirection] = useState<'LONG' | 'SHORT'>('LONG');
-  const [widgetId] = useState(() => ++widgetCounter);
+  const [chartData, setChartData] = useState<any[]>([]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -49,69 +52,69 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     
     return () => {
       mountedRef.current = false;
-      cleanupWidget();
+      cleanupChart();
     };
   }, []);
 
   useEffect(() => {
-    if (tradingViewScriptLoaded && mountedRef.current) {
-      createWidget();
+    if (lightweightChartsLoaded && mountedRef.current) {
+      loadChartData();
     }
-  }, [symbol, interval, chartType, theme]);
+  }, [symbol, interval]);
 
   const initializeChart = async () => {
     try {
       setIsLoading(true);
       setError(null);
       
-      await loadTradingViewScript();
+      await loadLightweightChartsScript();
       
       if (mountedRef.current) {
-        createWidget();
+        await loadChartData();
       }
     } catch (err) {
       if (mountedRef.current) {
-        setError('Ошибка загрузки TradingView');
+        setError('Ошибка загрузки библиотеки графиков');
         setIsLoading(false);
       }
     }
   };
 
-  const loadTradingViewScript = (): Promise<void> => {
-    // Если скрипт уже загружен
-    if (window.TradingView && tradingViewScriptLoaded) {
+  const loadLightweightChartsScript = (): Promise<void> => {
+    // Если библиотека уже загружена
+    if (window.LightweightCharts && lightweightChartsLoaded) {
       return Promise.resolve();
     }
 
     // Если уже есть промис загрузки
-    if (tradingViewScriptPromise) {
-      return tradingViewScriptPromise;
+    if (lightweightChartsPromise) {
+      return lightweightChartsPromise;
     }
 
     // Создаем новый промис загрузки
-    tradingViewScriptPromise = new Promise((resolve, reject) => {
+    lightweightChartsPromise = new Promise((resolve, reject) => {
       // Проверяем существующий скрипт
-      const existingScript = document.querySelector('script[src*="tv.js"]');
+      const existingScript = document.querySelector('script[src*="lightweight-charts"]');
       
       if (existingScript) {
-        if (window.TradingView) {
-          tradingViewScriptLoaded = true;
+        if (window.LightweightCharts) {
+          lightweightChartsLoaded = true;
           resolve();
           return;
         }
         
         // Ждем загрузки существующего скрипта
         existingScript.addEventListener('load', () => {
-          if (window.TradingView) {
-            tradingViewScriptLoaded = true;
+          if (window.LightweightCharts) {
+            lightweightChartsLoaded = true;
             resolve();
           } else {
-            reject(new Error('TradingView not available after script load'));
+            reject(new Error('LightweightCharts not available after script load'));
           }
         });
         
         existingScript.addEventListener('error', () => {
-          tradingViewScriptPromise = null;
+          lightweightChartsPromise = null;
           reject(new Error('Script loading failed'));
         });
         
@@ -120,207 +123,245 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
       // Создаем новый скрипт
       const script = document.createElement('script');
-      script.src = 'https://s3.tradingview.com/tv.js';
+      script.src = 'https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js';
       script.async = true;
       script.defer = true;
       
       script.onload = () => {
-        console.log('TradingView script loaded successfully');
-        if (window.TradingView) {
-          tradingViewScriptLoaded = true;
+        console.log('Lightweight Charts script loaded successfully');
+        if (window.LightweightCharts) {
+          lightweightChartsLoaded = true;
           resolve();
         } else {
-          reject(new Error('TradingView not available after script load'));
+          reject(new Error('LightweightCharts not available after script load'));
         }
       };
       
       script.onerror = () => {
-        console.error('Failed to load TradingView script');
-        tradingViewScriptPromise = null;
+        console.error('Failed to load Lightweight Charts script');
+        lightweightChartsPromise = null;
         reject(new Error('Script loading failed'));
       };
       
       document.head.appendChild(script);
     });
 
-    return tradingViewScriptPromise;
+    return lightweightChartsPromise;
   };
 
-  const cleanupWidget = () => {
-    if (widgetRef.current) {
-      try {
-        if (typeof widgetRef.current.remove === 'function') {
-          widgetRef.current.remove();
-        }
-      } catch (e) {
-        console.log('Widget cleanup error:', e);
-      }
-      widgetRef.current = null;
-    }
-    
-    // Очищаем контейнер
-    if (containerRef.current) {
-      containerRef.current.innerHTML = '';
-    }
-  };
-
-  const createWidget = () => {
-    if (!containerRef.current || !window.TradingView || !mountedRef.current) {
-      return;
-    }
-
-    // Очищаем предыдущий виджет
-    cleanupWidget();
-
-    const tvSymbol = `BYBIT:${symbol.replace('USDT', '')}USDT.P`;
-    const containerId = `tradingview_${widgetId}_${symbol}_${Date.now()}`;
-
-    // Создаем контейнер для виджета
-    const widgetContainer = document.createElement('div');
-    widgetContainer.id = containerId;
-    widgetContainer.style.width = '100%';
-    widgetContainer.style.height = '100%';
-    widgetContainer.style.position = 'relative';
-    
-    containerRef.current.appendChild(widgetContainer);
+  const loadChartData = async () => {
+    if (!mountedRef.current) return;
 
     try {
-      console.log('Creating TradingView widget for:', tvSymbol, 'in container:', containerId);
+      setIsLoading(true);
+      setError(null);
 
-      const widgetConfig = {
-        autosize: true,
-        symbol: tvSymbol,
-        interval: interval,
-        timezone: 'UTC',
-        theme: theme,
-        style: chartType,
-        locale: 'ru',
-        toolbar_bg: '#f1f3f6',
-        enable_publishing: false,
-        hide_top_toolbar: false,
-        hide_legend: false,
-        save_image: true,
-        container_id: containerId,
-        studies: ['Volume@tv-basicstudies'],
-        overrides: {
-          'mainSeriesProperties.candleStyle.upColor': '#26a69a',
-          'mainSeriesProperties.candleStyle.downColor': '#ef5350',
-          'mainSeriesProperties.candleStyle.borderUpColor': '#26a69a',
-          'mainSeriesProperties.candleStyle.borderDownColor': '#ef5350',
-          'mainSeriesProperties.candleStyle.wickUpColor': '#26a69a',
-          'mainSeriesProperties.candleStyle.wickDownColor': '#ef5350',
-          'volumePaneSize': 'medium',
-          'paneProperties.background': theme === 'dark' ? '#1e1e1e' : '#ffffff',
-          'paneProperties.vertGridProperties.color': theme === 'dark' ? '#2a2a2a' : '#e1e1e1',
-          'paneProperties.horzGridProperties.color': theme === 'dark' ? '#2a2a2a' : '#e1e1e1',
-        },
-        disabled_features: [
-          'use_localstorage_for_settings',
-          'volume_force_overlay'
-        ],
-        enabled_features: [
-          'study_templates'
-        ],
-        loading_screen: {
-          backgroundColor: theme === 'dark' ? '#1e1e1e' : '#ffffff',
-          foregroundColor: theme === 'dark' ? '#ffffff' : '#000000'
-        }
-      };
+      // Загружаем данные свечей
+      const response = await fetch(`/api/chart-data/${symbol}?interval=${interval}&hours=24`);
+      
+      if (!response.ok) {
+        throw new Error('Ошибка загрузки данных графика');
+      }
 
-      widgetRef.current = new window.TradingView.widget(widgetConfig);
-
-      // Устанавливаем таймаут для обработки случаев, когда onChartReady не вызывается
-      const chartReadyTimeout = setTimeout(() => {
-        if (mountedRef.current && isLoading) {
-          console.warn('Chart ready timeout, assuming chart is loaded');
-          setIsLoading(false);
-        }
-      }, 10000);
-
-      widgetRef.current.onChartReady(() => {
-        clearTimeout(chartReadyTimeout);
-        
-        if (!mountedRef.current) return;
-
-        try {
-          console.log('TradingView chart ready');
-          
-          // Добавляем маркеры алерта
-          if (alertPrice && widgetRef.current) {
-            const chart = widgetRef.current.chart();
-
-            // Горизонтальная линия алерта
-            chart.createShape(
-              { time: Date.now() / 1000, price: alertPrice },
-              {
-                shape: 'horizontal_line',
-                lock: true,
-                disableSelection: false,
-                disableSave: true,
-                disableUndo: true,
-                overrides: {
-                  linecolor: '#ff9800',
-                  linewidth: 3,
-                  linestyle: 2,
-                  showLabel: true,
-                  textcolor: '#ff9800',
-                  text: `🎯 Alert: $${alertPrice.toFixed(6)}`,
-                  horzLabelsAlign: 'right',
-                  vertLabelsAlign: 'middle'
-                }
-              }
-            );
-
-            // Вертикальная линия времени алерта
-            if (alertTime) {
-              const alertTimestamp = typeof alertTime === 'number' ? alertTime : new Date(alertTime).getTime();
-              chart.createShape(
-                { time: alertTimestamp / 1000, price: alertPrice },
-                {
-                  shape: 'vertical_line',
-                  lock: true,
-                  disableSelection: false,
-                  disableSave: true,
-                  disableUndo: true,
-                  overrides: {
-                    linecolor: '#ff5722',
-                    linewidth: 2,
-                    linestyle: 1,
-                    showLabel: true,
-                    textcolor: '#ff5722',
-                    text: '⏰ Alert Time',
-                    horzLabelsAlign: 'center',
-                    vertLabelsAlign: 'top'
-                  }
-                }
-              );
-            }
-          }
-
-          setIsLoading(false);
-          setError(null);
-          setRetryCount(0);
-        } catch (error) {
-          console.error('Ошибка инициализации графика:', error);
-          if (mountedRef.current) {
-            setError('Ошибка инициализации графика TradingView');
-            setIsLoading(false);
-          }
-        }
-      });
-
-    } catch (error) {
-      console.error('Ошибка создания TradingView виджета:', error);
+      const data = await response.json();
+      const candleData = data.chart_data || [];
+      
+      setChartData(candleData);
+      
       if (mountedRef.current) {
-        setError('Ошибка создания графика TradingView');
+        createChart(candleData);
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        console.error('Ошибка загрузки данных графика:', err);
+        setError(err instanceof Error ? err.message : 'Ошибка загрузки данных');
         setIsLoading(false);
       }
     }
   };
 
+  const createChart = (data: any[]) => {
+    if (!containerRef.current || !window.LightweightCharts || !mountedRef.current) {
+      return;
+    }
+
+    // Очищаем предыдущий график
+    cleanupChart();
+
+    try {
+      const chart = window.LightweightCharts.createChart(containerRef.current, {
+        width: containerRef.current.clientWidth,
+        height: containerRef.current.clientHeight,
+        layout: {
+          background: { color: theme === 'dark' ? '#1e1e1e' : '#ffffff' },
+          textColor: theme === 'dark' ? '#ffffff' : '#333333',
+        },
+        grid: {
+          vertLines: { color: theme === 'dark' ? '#2a2a2a' : '#f0f0f0' },
+          horzLines: { color: theme === 'dark' ? '#2a2a2a' : '#f0f0f0' },
+        },
+        crosshair: {
+          mode: window.LightweightCharts.CrosshairMode.Normal,
+        },
+        rightPriceScale: {
+          borderColor: theme === 'dark' ? '#485158' : '#cccccc',
+        },
+        timeScale: {
+          borderColor: theme === 'dark' ? '#485158' : '#cccccc',
+          timeVisible: true,
+          secondsVisible: false,
+        },
+      });
+
+      chartRef.current = chart;
+
+      // Добавляем серию свечей
+      const candlestickSeries = chart.addCandlestickSeries({
+        upColor: '#26a69a',
+        downColor: '#ef5350',
+        borderVisible: false,
+        wickUpColor: '#26a69a',
+        wickDownColor: '#ef5350',
+      });
+
+      candlestickSeriesRef.current = candlestickSeries;
+
+      // Добавляем серию объемов
+      const volumeSeries = chart.addHistogramSeries({
+        color: '#26a69a',
+        priceFormat: {
+          type: 'volume',
+        },
+        priceScaleId: 'volume',
+      });
+
+      volumeSeriesRef.current = volumeSeries;
+
+      // Настраиваем шкалу объемов
+      chart.priceScale('volume').applyOptions({
+        scaleMargins: {
+          top: 0.7,
+          bottom: 0,
+        },
+      });
+
+      // Подготавливаем данные для графика
+      if (data && data.length > 0) {
+        const candleData = data.map(item => ({
+          time: Math.floor(item.timestamp / 1000),
+          open: item.open,
+          high: item.high,
+          low: item.low,
+          close: item.close,
+        }));
+
+        const volumeData = data.map(item => ({
+          time: Math.floor(item.timestamp / 1000),
+          value: item.volume_usdt || item.volume,
+          color: item.is_long ? '#26a69a' : '#ef5350',
+        }));
+
+        candlestickSeries.setData(candleData);
+        volumeSeries.setData(volumeData);
+
+        // Добавляем маркеры алертов
+        addAlertMarkers(candlestickSeries);
+
+        // Подгоняем график под данные
+        chart.timeScale().fitContent();
+      }
+
+      // Обработчик изменения размера
+      const resizeObserver = new ResizeObserver(entries => {
+        if (entries.length === 0 || entries[0].target !== containerRef.current) {
+          return;
+        }
+        
+        const newRect = entries[0].contentRect;
+        chart.applyOptions({ 
+          width: newRect.width, 
+          height: newRect.height 
+        });
+      });
+
+      if (containerRef.current) {
+        resizeObserver.observe(containerRef.current);
+      }
+
+      setIsLoading(false);
+      setError(null);
+      setRetryCount(0);
+
+      console.log('Chart created successfully with', data.length, 'data points');
+    } catch (error) {
+      console.error('Ошибка создания графика:', error);
+      if (mountedRef.current) {
+        setError('Ошибка создания графика');
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const addAlertMarkers = (series: any) => {
+    if (!alertPrice || !series) return;
+
+    const markers = [];
+
+    // Основной маркер алерта
+    const alertTimestamp = alertTime 
+      ? Math.floor((typeof alertTime === 'number' ? alertTime : new Date(alertTime).getTime()) / 1000)
+      : Math.floor(Date.now() / 1000);
+
+    markers.push({
+      time: alertTimestamp,
+      position: 'aboveBar',
+      color: '#f68410',
+      shape: 'circle',
+      text: `Alert: $${alertPrice.toFixed(6)}`,
+    });
+
+    // Добавляем маркеры для связанных алертов
+    alerts.forEach((alert, index) => {
+      if (alert.symbol === symbol) {
+        const time = Math.floor((typeof alert.timestamp === 'number' ? alert.timestamp : new Date(alert.timestamp).getTime()) / 1000);
+        markers.push({
+          time,
+          position: index % 2 === 0 ? 'aboveBar' : 'belowBar',
+          color: alert.alert_type === 'volume_spike' ? '#2196f3' : 
+                 alert.alert_type === 'consecutive_long' ? '#4caf50' : '#9c27b0',
+          shape: 'square',
+          text: `${alert.alert_type}: $${alert.price.toFixed(6)}`,
+        });
+      }
+    });
+
+    if (markers.length > 0) {
+      series.setMarkers(markers);
+    }
+  };
+
+  const cleanupChart = () => {
+    if (chartRef.current) {
+      try {
+        chartRef.current.remove();
+      } catch (e) {
+        console.log('Chart cleanup error:', e);
+      }
+      chartRef.current = null;
+    }
+    
+    candlestickSeriesRef.current = null;
+    volumeSeriesRef.current = null;
+  };
+
   const openInTradingView = () => {
     const cleanSymbol = symbol.replace('USDT', '');
-    const url = `https://www.tradingview.com/chart/?symbol=BYBIT:${cleanSymbol}USDT.P&interval=${interval}`;
+    const tvInterval = interval === '1m' ? '1' : 
+                     interval === '5m' ? '5' : 
+                     interval === '15m' ? '15' : 
+                     interval === '1h' ? '60' : 
+                     interval === '4h' ? '240' : '1D';
+    const url = `https://www.tradingview.com/chart/?symbol=BYBIT:${cleanSymbol}USDT.P&interval=${tvInterval}`;
     window.open(url, '_blank');
   };
 
@@ -334,16 +375,16 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     setRetryCount(prev => prev + 1);
     
     // Сбрасываем глобальное состояние
-    tradingViewScriptLoaded = false;
-    tradingViewScriptPromise = null;
+    lightweightChartsLoaded = false;
+    lightweightChartsPromise = null;
 
     // Удаляем существующие скрипты
-    const existingScripts = document.querySelectorAll('script[src*="tv.js"]');
+    const existingScripts = document.querySelectorAll('script[src*="lightweight-charts"]');
     existingScripts.forEach(script => script.remove());
 
-    // Очищаем TradingView из window
-    if (window.TradingView) {
-      delete window.TradingView;
+    // Очищаем LightweightCharts из window
+    if (window.LightweightCharts) {
+      delete window.LightweightCharts;
     }
 
     // Перезагружаем через небольшую задержку
@@ -365,19 +406,12 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   };
 
   const intervals = [
-    { value: '1', label: '1м' },
-    { value: '5', label: '5м' },
-    { value: '15', label: '15м' },
-    { value: '60', label: '1ч' },
-    { value: '240', label: '4ч' },
-    { value: '1D', label: '1д' }
-  ];
-
-  const chartTypes = [
-    { value: '1', label: 'Свечи' },
-    { value: '0', label: 'Бары' },
-    { value: '3', label: 'Линия' },
-    { value: '9', label: 'Hollow' }
+    { value: '1m', label: '1м' },
+    { value: '5m', label: '5м' },
+    { value: '15m', label: '15м' },
+    { value: '1h', label: '1ч' },
+    { value: '4h', label: '4ч' },
+    { value: '1d', label: '1д' }
   ];
 
   return (
@@ -460,23 +494,6 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 ))}
               </div>
 
-              {/* Типы графиков */}
-              <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
-                {chartTypes.map((type) => (
-                  <button
-                    key={type.value}
-                    onClick={() => setChartType(type.value)}
-                    className={`px-2 py-1 text-xs rounded transition-colors ${
-                      chartType === type.value
-                        ? 'bg-green-600 text-white'
-                        : 'text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    {type.label}
-                  </button>
-                ))}
-              </div>
-
               <button
                 onClick={toggleFullscreen}
                 className="text-gray-600 hover:text-gray-800 p-2"
@@ -509,10 +526,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 <div className="text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
                   <p className="text-gray-600">
-                    {!tradingViewScriptLoaded ? 'Загрузка TradingView...' : 'Создание графика...'}
+                    {!lightweightChartsLoaded ? 'Загрузка Lightweight Charts...' : 'Загрузка данных графика...'}
                   </p>
                   <p className="text-xs text-gray-500 mt-2">
-                    Виджет #{widgetId} • Попытка {retryCount + 1}
+                    Попытка {retryCount + 1}
                   </p>
                 </div>
               </div>
@@ -539,7 +556,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
                       </button>
                     </div>
                     <p className="text-xs text-gray-500">
-                      Виджет #{widgetId} • Скрипт загружен: {tradingViewScriptLoaded ? 'Да' : 'Нет'}
+                      Библиотека загружена: {lightweightChartsLoaded ? 'Да' : 'Нет'}
                     </p>
                   </div>
                 </div>
@@ -556,11 +573,11 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           {/* Footer */}
           <div className="p-3 border-t border-gray-200 bg-gray-50">
             <div className="flex justify-between items-center text-sm text-gray-600">
-              <span>Данные предоставлены TradingView</span>
+              <span>Данные предоставлены Lightweight Charts</span>
               <div className="flex items-center space-x-4">
                 <span>📈 LONG: прибыль при росте</span>
                 <span>📉 SHORT: прибыль при падении</span>
-                <span>Обновляется в реальном времени</span>
+                <span>Свечей: {chartData.length}</span>
               </div>
             </div>
           </div>
