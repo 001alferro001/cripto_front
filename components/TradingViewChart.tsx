@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator } from 'lucide-react';
+import { X, ExternalLink, Maximize2, Minimize2, AlertTriangle, DollarSign, Calculator, TrendingUp, TrendingDown } from 'lucide-react';
 import PaperTradingModal from './PaperTradingModal';
 import RealTradingModal from './RealTradingModal';
 
@@ -34,6 +34,7 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
   const [retryCount, setRetryCount] = useState(0);
   const [showPaperTrading, setShowPaperTrading] = useState(false);
   const [showRealTrading, setShowRealTrading] = useState(false);
+  const [tradingDirection, setTradingDirection] = useState<'LONG' | 'SHORT'>('LONG');
 
   useEffect(() => {
     loadTradingViewScript();
@@ -251,6 +252,16 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     loadTradingViewScript();
   };
 
+  const openPaperTrading = (direction: 'LONG' | 'SHORT') => {
+    setTradingDirection(direction);
+    setShowPaperTrading(true);
+  };
+
+  const openRealTrading = (direction: 'LONG' | 'SHORT') => {
+    setTradingDirection(direction);
+    setShowRealTrading(true);
+  };
+
   const intervals = [
     { value: '1', label: '1м' },
     { value: '5', label: '5м' },
@@ -293,22 +304,42 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
             </div>
 
             <div className="flex items-center space-x-3">
-              {/* Кнопки торговли */}
-              <button
-                onClick={() => setShowPaperTrading(true)}
-                className="flex items-center space-x-2 bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded-lg transition-colors"
-              >
-                <Calculator className="w-4 h-4" />
-                <span>Бумажная торговля</span>
-              </button>
+              {/* Кнопки торговли LONG/SHORT */}
+              <div className="flex items-center space-x-2 bg-gray-100 rounded-lg p-1">
+                <span className="text-xs text-gray-600 px-2">Бумажная:</span>
+                <button
+                  onClick={() => openPaperTrading('LONG')}
+                  className="flex items-center space-x-1 bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded text-xs transition-colors"
+                >
+                  <TrendingUp className="w-3 h-3" />
+                  <span>LONG</span>
+                </button>
+                <button
+                  onClick={() => openPaperTrading('SHORT')}
+                  className="flex items-center space-x-1 bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs transition-colors"
+                >
+                  <TrendingDown className="w-3 h-3" />
+                  <span>SHORT</span>
+                </button>
+              </div>
 
-              <button
-                onClick={() => setShowRealTrading(true)}
-                className="flex items-center space-x-2 bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded-lg transition-colors"
-              >
-                <DollarSign className="w-4 h-4" />
-                <span>Реальная торговля</span>
-              </button>
+              <div className="flex items-center space-x-2 bg-gray-100 rounded-lg p-1">
+                <span className="text-xs text-gray-600 px-2">Реальная:</span>
+                <button
+                  onClick={() => openRealTrading('LONG')}
+                  className="flex items-center space-x-1 bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded text-xs transition-colors"
+                >
+                  <TrendingUp className="w-3 h-3" />
+                  <span>LONG</span>
+                </button>
+                <button
+                  onClick={() => openRealTrading('SHORT')}
+                  className="flex items-center space-x-1 bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded text-xs transition-colors"
+                >
+                  <TrendingDown className="w-3 h-3" />
+                  <span>SHORT</span>
+                </button>
+              </div>
 
               {/* Интервалы */}
               <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
@@ -413,7 +444,11 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           <div className="p-3 border-t border-gray-200 bg-gray-50">
             <div className="flex justify-between items-center text-sm text-gray-600">
               <span>Данные предоставлены TradingView</span>
-              <span>Обновляется в реальном времени</span>
+              <div className="flex items-center space-x-4">
+                <span>📈 LONG: прибыль при росте</span>
+                <span>📉 SHORT: прибыль при падении</span>
+                <span>Обновляется в реальном времени</span>
+              </div>
             </div>
           </div>
         </div>

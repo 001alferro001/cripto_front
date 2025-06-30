@@ -20,6 +20,7 @@ interface TradeCalculation {
   riskRewardRatio: number;
   positionValue: number;
   accountBalance: number;
+  direction: 'LONG' | 'SHORT';
 }
 
 interface TradingSettings {
@@ -37,6 +38,7 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
 }) => {
   // Состояния для калькулятора
   const [calculationMode, setCalculationMode] = useState<'risk_percentage' | 'fixed_amount' | 'fixed_stoploss'>('risk_percentage');
+  const [direction, setDirection] = useState<'LONG' | 'SHORT'>('LONG');
   const [entryPrice, setEntryPrice] = useState(alertPrice);
   const [stopLoss, setStopLoss] = useState(0);
   const [takeProfit, setTakeProfit] = useState(0);
@@ -64,19 +66,32 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
       setAccountBalance(settings.account_balance);
       setRiskPercentage(settings.max_risk_per_trade);
       
-      // Рассчитываем стоп-лосс и тейк-профит по умолчанию
-      const defaultStopLoss = entryPrice * (1 - settings.default_stop_loss_percentage / 100);
-      const defaultTakeProfit = entryPrice * (1 + settings.default_take_profit_percentage / 100);
-      
-      setStopLoss(defaultStopLoss);
-      setTakeProfit(defaultTakeProfit);
+      // Рассчитываем стоп-лосс и тейк-профит по умолчанию в зависимости от направления
+      calculateDefaultLevels();
     }
-  }, [settings, entryPrice]);
+  }, [settings, entryPrice, direction]);
 
   useEffect(() => {
     // Автоматический пересчет при изменении любых параметров
     calculateTrade();
-  }, [calculationMode, entryPrice, stopLoss, takeProfit, quantity, riskPercentage, riskAmount, accountBalance]);
+  }, [calculationMode, direction, entryPrice, stopLoss, takeProfit, quantity, riskPercentage, riskAmount, accountBalance]);
+
+  const calculateDefaultLevels = () => {
+    if (!settings) return;
+
+    if (direction === 'LONG') {
+      const defaultStopLoss = entryPrice * (1 - settings.default_stop_loss_percentage / 100);
+      const defaultTakeProfit = entryPrice * (1 + settings.default_take_profit_percentage / 100);
+      setStopLoss(defaultStopLoss);
+      setTakeProfit(defaultTakeProfit);
+    } else {
+      // SHORT позиция
+      const defaultStopLoss = entryPrice * (1 + settings.default_stop_loss_percentage / 100);
+      const defaultTakeProfit = entryPrice * (1 - settings.default_take_profit_percentage / 100);
+      setStopLoss(defaultStopLoss);
+      setTakeProfit(defaultTakeProfit);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -117,12 +132,22 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
       newErrors.push('Баланс аккаунта должен быть больше 0');
     }
 
-    if (stopLoss >= entryPrice) {
-      newErrors.push('Стоп-лосс должен быть меньше цены входа');
-    }
-
-    if (takeProfit <= entryPrice) {
-      newErrors.push('Тейк-профит должен быть больше цены входа');
+    // Валидация в зависимости от направления
+    if (direction === 'LONG') {
+      if (stopLoss >= entryPrice) {
+        newErrors.push('Для LONG: стоп-лосс должен быть меньше цены входа');
+      }
+      if (takeProfit <= entryPrice) {
+        newErrors.push('Для LONG: тейк-профит должен быть больше цены входа');
+      }
+    } else {
+      // SHORT позиция
+      if (stopLoss <= entryPrice) {
+        newErrors.push('Для SHORT: стоп-лосс должен быть больше цены входа');
+      }
+      if (takeProfit >= entryPrice) {
+        newErrors.push('Для SHORT: тейк-профит должен быть меньше цены входа');
+      }
     }
 
     setErrors(newErrors);
@@ -136,34 +161,40 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
     let calculatedRiskAmount = riskAmount;
     let calculatedRiskPercentage = riskPercentage;
 
+    // Расчет риска на монету в зависимости от направления
+    const riskPerCoin = direction === 'LONG' 
+      ? entryPrice - stopLoss 
+      : stopLoss - entryPrice;
+
     // Расчет в зависимости от режима
     switch (calculationMode) {
       case 'risk_percentage':
         // Режим: фиксированный процент риска
         calculatedRiskAmount = (accountBalance * riskPercentage) / 100;
-        const riskPerCoin = entryPrice - stopLoss;
         calculatedQuantity = calculatedRiskAmount / riskPerCoin;
         break;
 
       case 'fixed_amount':
         // Режим: фиксированная сумма риска
-        const riskPerCoinFixed = entryPrice - stopLoss;
-        calculatedQuantity = riskAmount / riskPerCoinFixed;
+        calculatedQuantity = riskAmount / riskPerCoin;
         calculatedRiskPercentage = (riskAmount / accountBalance) * 100;
         break;
 
       case 'fixed_stoploss':
         // Режим: фиксированный стоп-лосс и процент риска
         calculatedRiskAmount = (accountBalance * riskPercentage) / 100;
-        const riskPerCoinStopLoss = entryPrice - stopLoss;
-        calculatedQuantity = calculatedRiskAmount / riskPerCoinStopLoss;
+        calculatedQuantity = calculatedRiskAmount / riskPerCoin;
         break;
     }
 
     // Общие расчеты
     const positionValue = calculatedQuantity * entryPrice;
-    const potentialLoss = calculatedQuantity * (entryPrice - stopLoss);
-    const potentialProfit = calculatedQuantity * (takeProfit - entryPrice);
+    const potentialLoss = calculatedQuantity * riskPerCoin;
+    
+    const potentialProfit = direction === 'LONG'
+      ? calculatedQuantity * (takeProfit - entryPrice)
+      : calculatedQuantity * (entryPrice - takeProfit);
+    
     const riskRewardRatio = potentialProfit / potentialLoss;
 
     const newCalculation: TradeCalculation = {
@@ -177,7 +208,8 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
       potentialProfit,
       riskRewardRatio,
       positionValue,
-      accountBalance
+      accountBalance,
+      direction
     };
 
     setCalculation(newCalculation);
@@ -208,6 +240,7 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
         body: JSON.stringify({
           symbol,
           alert_id: alertId,
+          direction: calculation.direction,
           entry_price: calculation.entryPrice,
           stop_loss: calculation.stopLoss,
           take_profit: calculation.takeProfit,
@@ -272,8 +305,44 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Левая колонка - Настройки */}
             <div className="space-y-6">
-              {/* Режим расчета */}
+              {/* Направление торговли */}
               <div className="bg-blue-50 p-4 rounded-lg">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Направление торговли</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setDirection('LONG')}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      direction === 'LONG'
+                        ? 'border-green-500 bg-green-100 text-green-800'
+                        : 'border-gray-200 bg-white text-gray-700 hover:border-green-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center space-x-2">
+                      <TrendingUp className="w-5 h-5" />
+                      <span className="font-semibold">LONG</span>
+                    </div>
+                    <p className="text-xs mt-1">Покупка (рост цены)</p>
+                  </button>
+                  
+                  <button
+                    onClick={() => setDirection('SHORT')}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      direction === 'SHORT'
+                        ? 'border-red-500 bg-red-100 text-red-800'
+                        : 'border-gray-200 bg-white text-gray-700 hover:border-red-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center space-x-2">
+                      <TrendingDown className="w-5 h-5" />
+                      <span className="font-semibold">SHORT</span>
+                    </div>
+                    <p className="text-xs mt-1">Продажа (падение цены)</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Режим расчета */}
+              <div className="bg-gray-50 p-4 rounded-lg">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">Режим расчета</h3>
                 <div className="space-y-3">
                   <label className="flex items-center space-x-3 cursor-pointer">
@@ -353,6 +422,9 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Стоп-лосс ($)
+                      <span className="text-xs text-gray-500 ml-1">
+                        ({direction === 'LONG' ? 'должен быть меньше цены входа' : 'должен быть больше цены входа'})
+                      </span>
                     </label>
                     <input
                       type="number"
@@ -366,6 +438,9 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Тейк-профит ($)
+                      <span className="text-xs text-gray-500 ml-1">
+                        ({direction === 'LONG' ? 'должен быть больше цены входа' : 'должен быть меньше цены входа'})
+                      </span>
                     </label>
                     <input
                       type="number"
@@ -454,7 +529,7 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
                 <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
                     <Calculator className="w-5 h-5 mr-2" />
-                    Результаты расчета
+                    Результаты расчета ({calculation.direction})
                   </h3>
                   
                   <div className="grid grid-cols-2 gap-4 text-sm">
@@ -524,29 +599,55 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <h4 className="font-medium text-gray-900 mb-3 flex items-center">
                     <BarChart3 className="w-4 h-4 mr-2" />
-                    Визуализация сделки
+                    Визуализация сделки ({calculation.direction})
                   </h4>
                   
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-green-600">Тейк-профит:</span>
-                      <span className="font-mono">${calculation.takeProfit.toFixed(6)}</span>
-                    </div>
-                    
-                    <div className="h-2 bg-gradient-to-r from-red-200 via-yellow-200 to-green-200 rounded relative">
-                      <div 
-                        className="absolute w-2 h-4 bg-blue-600 rounded-full transform -translate-x-1 -translate-y-1"
-                        style={{
-                          left: `${((calculation.entryPrice - calculation.stopLoss) / (calculation.takeProfit - calculation.stopLoss)) * 100}%`
-                        }}
-                        title="Цена входа"
-                      />
-                    </div>
-                    
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-red-600">Стоп-лосс:</span>
-                      <span className="font-mono">${calculation.stopLoss.toFixed(6)}</span>
-                    </div>
+                    {direction === 'LONG' ? (
+                      <>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-green-600">Тейк-профит:</span>
+                          <span className="font-mono">${calculation.takeProfit.toFixed(6)}</span>
+                        </div>
+                        
+                        <div className="h-2 bg-gradient-to-r from-red-200 via-yellow-200 to-green-200 rounded relative">
+                          <div 
+                            className="absolute w-2 h-4 bg-blue-600 rounded-full transform -translate-x-1 -translate-y-1"
+                            style={{
+                              left: `${((calculation.entryPrice - calculation.stopLoss) / (calculation.takeProfit - calculation.stopLoss)) * 100}%`
+                            }}
+                            title="Цена входа"
+                          />
+                        </div>
+                        
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-red-600">Стоп-лосс:</span>
+                          <span className="font-mono">${calculation.stopLoss.toFixed(6)}</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-red-600">Стоп-лосс:</span>
+                          <span className="font-mono">${calculation.stopLoss.toFixed(6)}</span>
+                        </div>
+                        
+                        <div className="h-2 bg-gradient-to-r from-green-200 via-yellow-200 to-red-200 rounded relative">
+                          <div 
+                            className="absolute w-2 h-4 bg-blue-600 rounded-full transform -translate-x-1 -translate-y-1"
+                            style={{
+                              left: `${((calculation.stopLoss - calculation.entryPrice) / (calculation.stopLoss - calculation.takeProfit)) * 100}%`
+                            }}
+                            title="Цена входа"
+                          />
+                        </div>
+                        
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-green-600">Тейк-профит:</span>
+                          <span className="font-mono">${calculation.takeProfit.toFixed(6)}</span>
+                        </div>
+                      </>
+                    )}
                     
                     <div className="text-center text-xs text-gray-500 mt-2">
                       <span className="inline-block w-2 h-2 bg-blue-600 rounded-full mr-1"></span>
@@ -564,6 +665,9 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
           <div className="flex justify-between items-center">
             <div className="text-sm text-gray-600">
               <p>💡 Все расчеты производятся автоматически при изменении параметров</p>
+              <p className="text-xs mt-1">
+                {direction === 'LONG' ? '📈 LONG: прибыль при росте цены' : '📉 SHORT: прибыль при падении цены'}
+              </p>
             </div>
             
             <div className="flex items-center space-x-3">
@@ -584,7 +688,7 @@ const PaperTradingModal: React.FC<PaperTradingModalProps> = ({
                 ) : (
                   <Save className="w-4 h-4" />
                 )}
-                <span>{saving ? 'Сохранение...' : 'Сохранить сделку'}</span>
+                <span>{saving ? 'Сохранение...' : `Сохранить ${direction} сделку`}</span>
               </button>
             </div>
           </div>
