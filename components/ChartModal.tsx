@@ -1,48 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, ExternalLink, Download, BookOpen, Info } from 'lucide-react';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  TimeScale,
-  BarElement,
-  LineElement,
-  PointElement,
-  Title,
-  Tooltip,
-  Legend,
-  ChartOptions
-} from 'chart.js';
-import { Chart } from 'react-chartjs-2';
-import 'chartjs-adapter-date-fns';
-import annotationPlugin from 'chartjs-plugin-annotation';
-import { CandlestickController, CandlestickElement } from 'chartjs-chart-financial';
 import OrderBookModal from './OrderBookModal';
 import TimeZoneToggle from './TimeZoneToggle';
 import { useTimeZone } from '../contexts/TimeZoneContext';
 import { formatTime } from '../utils/timeUtils';
-
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  TimeScale,
-  BarElement,
-  LineElement,
-  PointElement,
-  Title,
-  Tooltip,
-  Legend,
-  annotationPlugin,
-  CandlestickController,
-  CandlestickElement
-);
 
 interface Alert {
   id: number;
   symbol: string;
   alert_type: string;
   price: number;
-  timestamp: number | string;  // UTC timestamp в миллисекундах или ISO строка
+  timestamp: number | string;
   close_timestamp?: number | string;
   preliminary_alert?: Alert;
   has_imbalance?: boolean;
@@ -65,12 +33,12 @@ interface Alert {
   order_book_snapshot?: {
     bids: Array<[number, number]>;
     asks: Array<[number, number]>;
-    timestamp: number | string;  // UTC timestamp в миллисекундах
+    timestamp: number | string;
   };
 }
 
 interface ChartData {
-  timestamp: number;  // UTC timestamp в миллисекундах
+  timestamp: number;
   open: number;
   high: number;
   low: number;
@@ -85,25 +53,83 @@ interface ChartModalProps {
   onClose: () => void;
 }
 
+// Объявляем типы для TradingView Lightweight Charts
+declare global {
+  interface Window {
+    LightweightCharts: any;
+  }
+}
+
 const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
   const [chartData, setChartData] = useState<ChartData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showOrderBook, setShowOrderBook] = useState(false);
   const [showTimestampInfo, setShowTimestampInfo] = useState(false);
+  const [chartReady, setChartReady] = useState(false);
+  
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<any>(null);
+  const candlestickSeriesRef = useRef<any>(null);
+  const volumeSeriesRef = useRef<any>(null);
   
   const { timeZone } = useTimeZone();
 
   useEffect(() => {
+    loadTradingViewScript();
     loadChartData();
-  }, [alert]);
+    
+    return () => {
+      // Cleanup chart on unmount
+      if (chartRef.current) {
+        chartRef.current.remove();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (chartReady && chartData.length > 0) {
+      createChart();
+    }
+  }, [chartReady, chartData]);
+
+  const loadTradingViewScript = async () => {
+    // Проверяем, загружен ли уже скрипт
+    if (window.LightweightCharts) {
+      setChartReady(true);
+      return;
+    }
+
+    try {
+      // Загружаем TradingView Lightweight Charts
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js';
+      script.async = true;
+      
+      script.onload = () => {
+        console.log('TradingView Lightweight Charts loaded successfully');
+        setChartReady(true);
+        setError(null);
+      };
+      
+      script.onerror = () => {
+        console.error('Failed to load TradingView Lightweight Charts');
+        setError('Ошибка загрузки библиотеки графиков');
+        setChartReady(false);
+      };
+      
+      document.head.appendChild(script);
+    } catch (err) {
+      console.error('Error loading TradingView script:', err);
+      setError('Ошибка загрузки графиков');
+    }
+  };
 
   const loadChartData = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      // Используем время алерта для загрузки данных (увеличиваем период до 2 часов)
       const alertTime = alert.close_timestamp || alert.timestamp;
       const response = await fetch(`/api/chart-data/${alert.symbol}?hours=2&alert_time=${alertTime}`);
       
@@ -119,6 +145,187 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const createChart = () => {
+    if (!chartContainerRef.current || !window.LightweightCharts || chartData.length === 0) {
+      return;
+    }
+
+    // Удаляем предыдущий график если есть
+    if (chartRef.current) {
+      chartRef.current.remove();
+    }
+
+    try {
+      // Создаем график
+      const chart = window.LightweightCharts.createChart(chartContainerRef.current, {
+        width: chartContainerRef.current.clientWidth,
+        height: 500,
+        layout: {
+          background: { color: '#ffffff' },
+          textColor: '#333',
+        },
+        grid: {
+          vertLines: { color: '#f0f0f0' },
+          horzLines: { color: '#f0f0f0' },
+        },
+        crosshair: {
+          mode: window.LightweightCharts.CrosshairMode.Normal,
+        },
+        rightPriceScale: {
+          borderColor: '#cccccc',
+        },
+        timeScale: {
+          borderColor: '#cccccc',
+          timeVisible: true,
+          secondsVisible: false,
+        },
+      });
+
+      chartRef.current = chart;
+
+      // Добавляем серию свечей
+      const candlestickSeries = chart.addCandlestickSeries({
+        upColor: '#26a69a',
+        downColor: '#ef5350',
+        borderVisible: false,
+        wickUpColor: '#26a69a',
+        wickDownColor: '#ef5350',
+      });
+
+      candlestickSeriesRef.current = candlestickSeries;
+
+      // Добавляем серию объемов
+      const volumeSeries = chart.addHistogramSeries({
+        color: '#26a69a',
+        priceFormat: {
+          type: 'volume',
+        },
+        priceScaleId: 'volume',
+      });
+
+      volumeSeriesRef.current = volumeSeries;
+
+      // Настраиваем шкалу объемов
+      chart.priceScale('volume').applyOptions({
+        scaleMargins: {
+          top: 0.7,
+          bottom: 0,
+        },
+      });
+
+      // Подготавливаем данные для свечей
+      const candleData = chartData.map(item => ({
+        time: Math.floor(item.timestamp / 1000), // Конвертируем в секунды
+        open: item.open,
+        high: item.high,
+        low: item.low,
+        close: item.close,
+      }));
+
+      // Подготавливаем данные для объемов
+      const volumeData = chartData.map(item => ({
+        time: Math.floor(item.timestamp / 1000),
+        value: item.volume_usdt,
+        color: item.is_long ? '#26a69a' : '#ef5350',
+      }));
+
+      // Устанавливаем данные
+      candlestickSeries.setData(candleData);
+      volumeSeries.setData(volumeData);
+
+      // Добавляем маркеры алертов
+      addAlertMarkers(candlestickSeries);
+
+      // Добавляем зоны имбаланса
+      if (alert.has_imbalance && alert.imbalance_data) {
+        addImbalanceZones(chart);
+      }
+
+      // Подгоняем график под данные
+      chart.timeScale().fitContent();
+
+      // Обработка изменения размера
+      const resizeObserver = new ResizeObserver(entries => {
+        if (entries.length === 0 || entries[0].target !== chartContainerRef.current) {
+          return;
+        }
+        const newRect = entries[0].contentRect;
+        chart.applyOptions({ width: newRect.width, height: newRect.height });
+      });
+
+      if (chartContainerRef.current) {
+        resizeObserver.observe(chartContainerRef.current);
+      }
+
+      console.log('Chart created successfully');
+    } catch (err) {
+      console.error('Error creating chart:', err);
+      setError('Ошибка создания графика');
+    }
+  };
+
+  const addAlertMarkers = (series: any) => {
+    const alertTime = alert.close_timestamp || alert.timestamp;
+    const alertTimestamp = Math.floor((typeof alertTime === 'number' ? alertTime : new Date(alertTime).getTime()) / 1000);
+
+    const markers = [{
+      time: alertTimestamp,
+      position: 'aboveBar',
+      color: '#f68410',
+      shape: 'circle',
+      text: `Alert: $${alert.price.toFixed(6)}`,
+    }];
+
+    // Добавляем маркер уровня алерта если есть
+    if (alert.candle_data?.alert_level) {
+      markers.push({
+        time: alertTimestamp,
+        position: 'belowBar',
+        color: '#9c27b0',
+        shape: 'square',
+        text: `Level: $${alert.candle_data.alert_level.toFixed(6)}`,
+      });
+    }
+
+    series.setMarkers(markers);
+  };
+
+  const addImbalanceZones = (chart: any) => {
+    if (!alert.imbalance_data) return;
+
+    const alertTime = alert.close_timestamp || alert.timestamp;
+    const alertTimestamp = Math.floor((typeof alertTime === 'number' ? alertTime : new Date(alertTime).getTime()) / 1000);
+
+    // Создаем линейную серию для зон имбаланса
+    const imbalanceTopSeries = chart.addLineSeries({
+      color: alert.imbalance_data.direction === 'bullish' ? '#26a69a' : '#ef5350',
+      lineWidth: 2,
+      lineStyle: window.LightweightCharts.LineStyle.Dashed,
+      title: `${alert.imbalance_data.type.toUpperCase()} Top`,
+    });
+
+    const imbalanceBottomSeries = chart.addLineSeries({
+      color: alert.imbalance_data.direction === 'bullish' ? '#26a69a' : '#ef5350',
+      lineWidth: 2,
+      lineStyle: window.LightweightCharts.LineStyle.Dashed,
+      title: `${alert.imbalance_data.type.toUpperCase()} Bottom`,
+    });
+
+    // Добавляем данные для линий
+    const startTime = alertTimestamp - 300; // 5 минут назад
+    const endTime = alertTimestamp + 300;   // 5 минут вперед
+
+    imbalanceTopSeries.setData([
+      { time: startTime, value: alert.imbalance_data.top },
+      { time: endTime, value: alert.imbalance_data.top },
+    ]);
+
+    imbalanceBottomSeries.setData([
+      { time: startTime, value: alert.imbalance_data.bottom },
+      { time: endTime, value: alert.imbalance_data.bottom },
+    ]);
   };
 
   const openTradingView = () => {
@@ -144,307 +351,6 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
     window.URL.revokeObjectURL(url);
   };
 
-  const getChartConfig = () => {
-    if (chartData.length === 0) return null;
-
-    // Определяем время алерта - преобразуем в миллисекунды если нужно
-    let alertTime: number;
-    const alertTimestamp = alert.close_timestamp || alert.timestamp;
-    
-    if (typeof alertTimestamp === 'number') {
-      alertTime = alertTimestamp;
-    } else {
-      alertTime = new Date(alertTimestamp).getTime();
-    }
-    
-    // Создаем свечные данные
-    const candleData = chartData.map(d => ({
-      x: d.timestamp,
-      o: d.open,
-      h: d.high,
-      l: d.low,
-      c: d.close
-    }));
-
-    // Данные объема с увеличенной прозрачностью для лучшей видимости свечей
-    const volumeData = chartData.map(d => ({
-      x: d.timestamp,
-      y: d.volume_usdt
-    }));
-
-    // Отметки алертов
-    const alertPoints = [{
-      x: alertTime,
-      y: alert.price
-    }];
-
-    // Уровень алерта
-    let alertLevelData = [];
-    if (alert.candle_data?.alert_level) {
-      alertLevelData = [{
-        x: alertTime,
-        y: alert.candle_data.alert_level
-      }];
-    }
-
-    // Аннотации для имбаланса
-    const annotations: any = {};
-    
-    if (alert.has_imbalance && alert.imbalance_data) {
-      const imbalanceTime = alert.imbalance_data.timestamp || alertTime;
-      
-      // Линии границ имбаланса
-      annotations.imbalanceTop = {
-        type: 'line',
-        yAxisID: 'y',
-        xMin: imbalanceTime,
-        xMax: imbalanceTime + 300000, // 5 минут вправо
-        yMin: alert.imbalance_data.top,
-        yMax: alert.imbalance_data.top,
-        borderColor: alert.imbalance_data.direction === 'bullish' ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)',
-        borderWidth: 2,
-        borderDash: [3, 3],
-        label: {
-          content: `${alert.imbalance_data.type.toUpperCase()} TOP`,
-          enabled: true,
-          position: 'end',
-          backgroundColor: alert.imbalance_data.direction === 'bullish' ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)',
-          color: 'white',
-          padding: 4
-        }
-      };
-
-      annotations.imbalanceBottom = {
-        type: 'line',
-        yAxisID: 'y',
-        xMin: imbalanceTime,
-        xMax: imbalanceTime + 300000, // 5 минут вправо
-        yMin: alert.imbalance_data.bottom,
-        yMax: alert.imbalance_data.bottom,
-        borderColor: alert.imbalance_data.direction === 'bullish' ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)',
-        borderWidth: 2,
-        borderDash: [3, 3],
-        label: {
-          content: `${alert.imbalance_data.type.toUpperCase()} BOTTOM`,
-          enabled: true,
-          position: 'end',
-          backgroundColor: alert.imbalance_data.direction === 'bullish' ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)',
-          color: 'white',
-          padding: 4
-        }
-      };
-
-      // Зона имбаланса
-      annotations.imbalanceZone = {
-        type: 'box',
-        yAxisID: 'y',
-        xMin: imbalanceTime,
-        xMax: imbalanceTime + 300000,
-        yMin: alert.imbalance_data.bottom,
-        yMax: alert.imbalance_data.top,
-        backgroundColor: alert.imbalance_data.direction === 'bullish' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-        borderColor: 'transparent'
-      };
-    }
-
-    // Линия уровня алерта
-    if (alert.candle_data?.alert_level) {
-      annotations.alertLevel = {
-        type: 'line',
-        yAxisID: 'y',
-        yMin: alert.candle_data.alert_level,
-        yMax: alert.candle_data.alert_level,
-        borderColor: 'rgb(168, 85, 247)',
-        borderWidth: 2,
-        borderDash: [5, 5],
-        label: {
-          content: 'Уровень алерта',
-          enabled: true,
-          position: 'end'
-        }
-      };
-    }
-
-    const data = {
-      datasets: [
-        {
-          label: 'Свечи',
-          data: candleData,
-          type: 'candlestick' as const,
-          yAxisID: 'y',
-          color: {
-            up: 'rgb(34, 197, 94)',
-            down: 'rgb(239, 68, 68)',
-            unchanged: 'rgb(156, 163, 175)'
-          }
-        },
-        {
-          label: 'Объем (USDT)',
-          data: volumeData,
-          type: 'bar' as const,
-          // Увеличиваем прозрачность для лучшей видимости свечей
-          backgroundColor: chartData.map(d => d.is_long ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'),
-          borderColor: chartData.map(d => d.is_long ? 'rgba(34, 197, 94, 0.4)' : 'rgba(239, 68, 68, 0.4)'),
-          borderWidth: 1,
-          yAxisID: 'y1'
-        },
-        {
-          label: 'Алерты',
-          data: alertPoints,
-          type: 'scatter' as const,
-          backgroundColor: 'rgb(255, 215, 0)',
-          borderColor: 'rgb(255, 193, 7)',
-          pointRadius: 8,
-          pointHoverRadius: 10,
-          yAxisID: 'y'
-        },
-        ...(alertLevelData.length > 0 ? [{
-          label: 'Уровень алерта',
-          data: alertLevelData,
-          type: 'scatter' as const,
-          backgroundColor: 'rgb(168, 85, 247)',
-          borderColor: 'rgb(168, 85, 247)',
-          pointRadius: 6,
-          pointHoverRadius: 8,
-          yAxisID: 'y'
-        }] : [])
-      ]
-    };
-
-    // Рассчитываем диапазоны для правильного масштабирования
-    const maxPrice = Math.max(...chartData.map(d => d.high));
-    const minPrice = Math.min(...chartData.map(d => d.low));
-    const priceRange = maxPrice - minPrice;
-    const maxVolume = Math.max(...chartData.map(d => d.volume_usdt));
-
-    const options: ChartOptions = {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: {
-        mode: 'index' as const,
-        intersect: false,
-      },
-      plugins: {
-        title: {
-          display: true,
-          text: `${alert.symbol} - Свечной график с объемами (${chartData.length} свечей) - ${timeZone === 'UTC' ? 'UTC' : 'Локальное время'}`,
-          color: '#374151'
-        },
-        legend: {
-          labels: {
-            color: '#374151'
-          }
-        },
-        tooltip: {
-          callbacks: {
-            title: (context) => {
-              return formatTime(context[0].parsed.x, timeZone);
-            },
-            label: (context) => {
-              if (context.datasetIndex === 0) {
-                const candle = chartData.find(d => d.timestamp === context.parsed.x);
-                if (candle) {
-                  return [
-                    `Open: $${candle.open.toFixed(8)}`,
-                    `High: $${candle.high.toFixed(8)}`,
-                    `Low: $${candle.low.toFixed(8)}`,
-                    `Close: $${candle.close.toFixed(8)}`,
-                    `Volume: ${candle.volume.toFixed(2)}`,
-                    `Type: ${candle.is_long ? 'LONG' : 'SHORT'}`
-                  ];
-                }
-              } else if (context.datasetIndex === 1) {
-                return `Объем: $${context.parsed.y.toLocaleString()}`;
-              } else if (context.datasetIndex === 2) {
-                return `Алерт: $${context.parsed.y.toFixed(8)}`;
-              } else {
-                return `Уровень алерта: $${context.parsed.y.toFixed(8)}`;
-              }
-              return '';
-            }
-          }
-        },
-        annotation: {
-          annotations
-        }
-      },
-      scales: {
-        x: {
-          type: 'time',
-          time: {
-            unit: 'minute',
-            displayFormats: {
-              minute: 'HH:mm'
-            },
-            tooltipFormat: timeZone === 'UTC' ? 'dd.MM.yyyy HH:mm:ss UTC' : 'dd.MM.yyyy HH:mm:ss'
-          },
-          ticks: {
-            color: '#6B7280',
-            callback: function(value, index, values) {
-              const date = new Date(value);
-              if (timeZone === 'UTC') {
-                return date.toLocaleTimeString('ru-RU', { 
-                  timeZone: 'UTC',
-                  hour: '2-digit', 
-                  minute: '2-digit' 
-                });
-              } else {
-                return date.toLocaleTimeString('ru-RU', { 
-                  hour: '2-digit', 
-                  minute: '2-digit' 
-                });
-              }
-            }
-          },
-          grid: {
-            color: 'rgba(107, 114, 128, 0.1)'
-          }
-        },
-        y: {
-          type: 'linear',
-          display: true,
-          position: 'left',
-          ticks: {
-            color: '#6B7280',
-            callback: function(value) {
-              return '$' + Number(value).toFixed(8);
-            }
-          },
-          grid: {
-            color: 'rgba(107, 114, 128, 0.1)'
-          }
-        },
-        y1: {
-          type: 'linear',
-          display: true,
-          position: 'right',
-          // Объем имеет свой собственный масштаб, основанный на максимальном объеме
-          min: 0,
-          max: maxVolume * 1.1, // Добавляем 10% сверху для лучшей визуализации
-          ticks: {
-            color: '#6B7280',
-            callback: function(value) {
-              const num = Number(value);
-              if (num >= 1000000) {
-                return '$' + (num / 1000000).toFixed(1) + 'M';
-              } else if (num >= 1000) {
-                return '$' + (num / 1000).toFixed(1) + 'K';
-              }
-              return '$' + num.toFixed(0);
-            }
-          },
-          grid: {
-            drawOnChartArea: false,
-          },
-        }
-      }
-    };
-
-    return { data, options };
-  };
-
-  const chartConfig = getChartConfig();
-
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-lg w-full max-w-[95vw] h-[90vh] flex flex-col">
@@ -468,10 +374,8 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
           </div>
           
           <div className="flex items-center space-x-3">
-            {/* Переключатель часового пояса */}
             <TimeZoneToggle />
 
-            {/* Информация о timestamp */}
             <button
               onClick={() => setShowTimestampInfo(!showTimestampInfo)}
               className="text-gray-500 hover:text-gray-700 p-2"
@@ -550,19 +454,36 @@ const ChartModal: React.FC<ChartModalProps> = ({ alert, onClose }) => {
                 <p className="text-red-600 mb-4">Ошибка: {error}</p>
                 <button
                   onClick={loadChartData}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors mr-2"
                 >
                   Попробовать снова
                 </button>
+                <button
+                  onClick={openTradingView}
+                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
+                >
+                  Открыть TradingView
+                </button>
               </div>
             </div>
-          ) : chartConfig ? (
-            <div className="h-full">
-              <Chart type="candlestick" data={chartConfig.data} options={chartConfig.options} />
+          ) : !chartReady ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
+                <p className="text-gray-600">Загрузка библиотеки графиков...</p>
+              </div>
             </div>
-          ) : (
+          ) : chartData.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <p className="text-gray-600">Нет данных для отображения</p>
+            </div>
+          ) : (
+            <div className="h-full">
+              <div 
+                ref={chartContainerRef} 
+                className="w-full h-full"
+                style={{ minHeight: '400px' }}
+              />
             </div>
           )}
         </div>
