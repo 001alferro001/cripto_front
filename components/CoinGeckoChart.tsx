@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, ExternalLink, TrendingUp, TrendingDown, RefreshCw, AlertTriangle } from 'lucide-react';
+import { X, ExternalLink, TrendingUp, TrendingDown, RefreshCw, AlertTriangle, Globe } from 'lucide-react';
 
 interface CoinGeckoChartProps {
   symbol: string;
@@ -15,25 +15,46 @@ interface CoinData {
   total_volume: number;
   image: string;
   symbol: string;
+  market_cap_rank?: number;
+  circulating_supply?: number;
+  total_supply?: number;
+}
+
+interface PriceData {
+  prices: number[][];
+  market_caps: number[][];
+  total_volumes: number[][];
 }
 
 const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
   const [coinData, setCoinData] = useState<CoinData | null>(null);
+  const [priceData, setPriceData] = useState<PriceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState('7');
-  const [chartError, setChartError] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const [chartReady, setChartReady] = useState(false);
 
   useEffect(() => {
     loadCoinData();
   }, [symbol]);
 
+  useEffect(() => {
+    if (coinData) {
+      loadPriceData();
+    }
+  }, [coinData, days]);
+
+  useEffect(() => {
+    if (priceData && coinData) {
+      loadChartScript();
+    }
+  }, [priceData, coinData]);
+
   const loadCoinData = async () => {
     try {
       setLoading(true);
       setError(null);
-      setChartError(false);
 
       // Преобразуем символ (например, BTCUSDT -> bitcoin)
       const coinId = getCoinId(symbol);
@@ -51,17 +72,19 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
         return;
       }
 
-      // Загружаем данные о монете с таймаутом
+      // Загружаем данные о монете с правильными параметрами
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 секунд таймаут
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 секунд таймаут
 
       try {
+        // Используем правильный endpoint с минимальными параметрами
         const response = await fetch(
           `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false`,
           { 
             signal: controller.signal,
             headers: {
               'Accept': 'application/json',
+              'User-Agent': 'CryptoAnalyzer/1.0'
             }
           }
         );
@@ -69,20 +92,31 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
+          if (response.status === 429) {
+            throw new Error('Превышен лимит запросов CoinGecko API. Попробуйте позже.');
+          }
           throw new Error(`Ошибка загрузки данных CoinGecko: ${response.status}`);
         }
 
         const data = await response.json();
         
+        // Проверяем наличие необходимых данных
+        if (!data.market_data || !data.market_data.current_price) {
+          throw new Error('Неполные данные от CoinGecko API');
+        }
+        
         setCoinData({
           id: data.id,
           name: data.name,
           symbol: data.symbol.toUpperCase(),
-          current_price: data.market_data.current_price.usd,
-          price_change_percentage_24h: data.market_data.price_change_percentage_24h,
-          market_cap: data.market_data.market_cap.usd,
-          total_volume: data.market_data.total_volume.usd,
-          image: data.image.large
+          current_price: data.market_data.current_price.usd || 0,
+          price_change_percentage_24h: data.market_data.price_change_percentage_24h || 0,
+          market_cap: data.market_data.market_cap.usd || 0,
+          total_volume: data.market_data.total_volume.usd || 0,
+          image: data.image?.large || data.image?.small || '',
+          market_cap_rank: data.market_cap_rank,
+          circulating_supply: data.market_data.circulating_supply,
+          total_supply: data.market_data.total_supply
         });
 
         setRetryCount(0);
@@ -104,6 +138,210 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
     }
   };
 
+  const loadPriceData = async () => {
+    if (!coinData) return;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      // Загружаем исторические данные цен
+      const response = await fetch(
+        `https://api.coingecko.com/api/v3/coins/${coinData.id}/market_chart?vs_currency=usd&days=${days}&interval=${days === '1' ? 'hourly' : 'daily'}`,
+        { 
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'CryptoAnalyzer/1.0'
+          }
+        }
+      );
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        const data = await response.json();
+        setPriceData(data);
+      } else {
+        console.warn('Не удалось загрузить исторические данные цен');
+        setPriceData(null);
+      }
+    } catch (error) {
+      console.warn('Ошибка загрузки исторических данных:', error);
+      setPriceData(null);
+    }
+  };
+
+  const loadChartScript = async () => {
+    try {
+      // Проверяем, загружен ли уже скрипт Chart.js
+      if (window.Chart) {
+        createChart();
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js';
+      script.async = true;
+      
+      script.onload = () => {
+        console.log('Chart.js loaded successfully');
+        createChart();
+      };
+      
+      script.onerror = () => {
+        console.error('Failed to load Chart.js');
+        setChartReady(false);
+      };
+      
+      document.head.appendChild(script);
+    } catch (err) {
+      console.error('Error loading Chart.js:', err);
+      setChartReady(false);
+    }
+  };
+
+  const createChart = () => {
+    if (!priceData || !coinData) {
+      setChartReady(true); // Показываем интерфейс даже без графика
+      return;
+    }
+
+    try {
+      const canvas = document.getElementById('priceChart') as HTMLCanvasElement;
+      if (!canvas) {
+        setTimeout(createChart, 100); // Повторяем попытку через 100мс
+        return;
+      }
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      // Очищаем предыдущий график
+      if (window.chartInstance) {
+        window.chartInstance.destroy();
+      }
+
+      // Подготавливаем данные для графика
+      const labels = priceData.prices.map(([timestamp]) => {
+        const date = new Date(timestamp);
+        return days === '1' ? 
+          date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) :
+          date.toLocaleDateString('ru-RU', { month: 'short', day: 'numeric' });
+      });
+
+      const prices = priceData.prices.map(([, price]) => price);
+      const volumes = priceData.total_volumes.map(([, volume]) => volume);
+
+      // Создаем график
+      window.chartInstance = new window.Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Цена (USD)',
+              data: prices,
+              borderColor: coinData.price_change_percentage_24h >= 0 ? '#10b981' : '#ef4444',
+              backgroundColor: coinData.price_change_percentage_24h >= 0 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+              borderWidth: 2,
+              fill: true,
+              tension: 0.1,
+              yAxisID: 'y'
+            },
+            {
+              label: 'Объем (USD)',
+              data: volumes,
+              type: 'bar',
+              backgroundColor: 'rgba(59, 130, 246, 0.3)',
+              borderColor: 'rgba(59, 130, 246, 0.8)',
+              borderWidth: 1,
+              yAxisID: 'y1'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
+          plugins: {
+            title: {
+              display: true,
+              text: `${coinData.name} (${coinData.symbol}) - ${days} дней`,
+              font: {
+                size: 16,
+                weight: 'bold'
+              }
+            },
+            legend: {
+              display: true,
+              position: 'top'
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  if (context.datasetIndex === 0) {
+                    return `Цена: $${context.parsed.y.toLocaleString()}`;
+                  } else {
+                    return `Объем: $${(context.parsed.y / 1000000).toFixed(2)}M`;
+                  }
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              display: true,
+              title: {
+                display: true,
+                text: 'Время'
+              }
+            },
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Цена (USD)'
+              },
+              ticks: {
+                callback: function(value) {
+                  return '$' + Number(value).toLocaleString();
+                }
+              }
+            },
+            y1: {
+              type: 'linear',
+              display: true,
+              position: 'right',
+              title: {
+                display: true,
+                text: 'Объем (USD)'
+              },
+              grid: {
+                drawOnChartArea: false,
+              },
+              ticks: {
+                callback: function(value) {
+                  return '$' + (Number(value) / 1000000).toFixed(1) + 'M';
+                }
+              }
+            }
+          }
+        }
+      });
+
+      setChartReady(true);
+    } catch (error) {
+      console.error('Error creating chart:', error);
+      setChartReady(true); // Показываем интерфейс даже при ошибке графика
+    }
+  };
+
   const searchCoinBySymbol = async (symbol: string): Promise<CoinData | null> => {
     try {
       // Убираем USDT из символа для поиска
@@ -119,6 +357,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
           signal: controller.signal,
           headers: {
             'Accept': 'application/json',
+            'User-Agent': 'CryptoAnalyzer/1.0'
           }
         }
       );
@@ -148,6 +387,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
           signal: coinController.signal,
           headers: {
             'Accept': 'application/json',
+            'User-Agent': 'CryptoAnalyzer/1.0'
           }
         }
       );
@@ -164,11 +404,14 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
         id: coinData.id,
         name: coinData.name,
         symbol: coinData.symbol.toUpperCase(),
-        current_price: coinData.market_data.current_price.usd,
-        price_change_percentage_24h: coinData.market_data.price_change_percentage_24h,
-        market_cap: coinData.market_data.market_cap.usd,
-        total_volume: coinData.market_data.total_volume.usd,
-        image: coinData.image.large
+        current_price: coinData.market_data.current_price.usd || 0,
+        price_change_percentage_24h: coinData.market_data.price_change_percentage_24h || 0,
+        market_cap: coinData.market_data.market_cap.usd || 0,
+        total_volume: coinData.market_data.total_volume.usd || 0,
+        image: coinData.image?.large || coinData.image?.small || '',
+        market_cap_rank: coinData.market_cap_rank,
+        circulating_supply: coinData.market_data.circulating_supply,
+        total_supply: coinData.market_data.total_supply
       };
       
     } catch (error) {
@@ -178,20 +421,22 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
   };
 
   const getCoinId = (symbol: string): string | null => {
-    // Расширенный маппинг популярных символов на ID CoinGecko
+    // Расширенный и обновленный маппинг популярных символов на ID CoinGecko
     const symbolMap: { [key: string]: string } = {
+      // Топ криптовалюты
       'BTCUSDT': 'bitcoin',
       'ETHUSDT': 'ethereum',
       'BNBUSDT': 'binancecoin',
+      'XRPUSDT': 'ripple',
       'ADAUSDT': 'cardano',
       'SOLUSDT': 'solana',
-      'XRPUSDT': 'ripple',
-      'DOTUSDT': 'polkadot',
       'DOGEUSDT': 'dogecoin',
+      'DOTUSDT': 'polkadot',
       'AVAXUSDT': 'avalanche-2',
       'SHIBUSDT': 'shiba-inu',
-      'MATICUSDT': 'matic-network',
       'LTCUSDT': 'litecoin',
+      'MATICUSDT': 'matic-network',
+      'TRXUSDT': 'tron',
       'UNIUSDT': 'uniswap',
       'LINKUSDT': 'chainlink',
       'ATOMUSDT': 'cosmos',
@@ -199,7 +444,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       'XLMUSDT': 'stellar',
       'BCHUSDT': 'bitcoin-cash',
       'FILUSDT': 'filecoin',
-      'TRXUSDT': 'tron',
       'EOSUSDT': 'eos',
       'AAVEUSDT': 'aave',
       'MKRUSDT': 'maker',
@@ -213,8 +457,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       'AXSUSDT': 'axie-infinity',
       'THETAUSDT': 'theta-token',
       'XTZUSDT': 'tezos',
-      'EGLDUSDT': 'elrond-erd-2',
-      'KLAYUSDT': 'klay-token',
       'NEARUSDT': 'near',
       'FLOWUSDT': 'flow',
       'IOTAUSDT': 'iota',
@@ -239,6 +481,8 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       'FETUSDT': 'fetch-ai',
       'CELRUSDT': 'celer-network',
       'BANDUSDT': 'band-protocol',
+      
+      // Новые популярные токены 2024
       'PEPEUSDT': 'pepe',
       'WIFUSDT': 'dogwifcoin',
       'BONKUSDT': 'bonk',
@@ -269,7 +513,6 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       'AIUSDT': 'sleepless-ai',
       'XAIUSDT': 'xai-blockchain',
       'ACEUSDT': 'fusionist',
-      'NFPUSDT': 'burrow',
       'MAVUSDT': 'maverick-protocol',
       'PENDLEUSDT': 'pendle',
       'ARKMUSDT': 'arkham',
@@ -277,6 +520,8 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       'GALAUSDT': 'gala',
       'GMTUSDT': 'stepn',
       'APEUSDT': 'apecoin',
+      
+      // DeFi токены
       'LRCUSDT': 'loopring',
       'CRVUSDT': 'curve-dao-token',
       'SUSHIUSDT': 'sushi',
@@ -314,7 +559,9 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
   };
 
   const formatNumber = (num: number): string => {
-    if (num >= 1e9) {
+    if (num >= 1e12) {
+      return `$${(num / 1e12).toFixed(2)}T`;
+    } else if (num >= 1e9) {
       return `$${(num / 1e9).toFixed(2)}B`;
     } else if (num >= 1e6) {
       return `$${(num / 1e6).toFixed(2)}M`;
@@ -322,6 +569,19 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
       return `$${(num / 1e3).toFixed(2)}K`;
     }
     return `$${num.toFixed(2)}`;
+  };
+
+  const formatSupply = (num: number): string => {
+    if (num >= 1e12) {
+      return `${(num / 1e12).toFixed(2)}T`;
+    } else if (num >= 1e9) {
+      return `${(num / 1e9).toFixed(2)}B`;
+    } else if (num >= 1e6) {
+      return `${(num / 1e6).toFixed(2)}M`;
+    } else if (num >= 1e3) {
+      return `${(num / 1e3).toFixed(2)}K`;
+    }
+    return num.toFixed(0);
   };
 
   const openCoinGecko = () => {
@@ -332,35 +592,39 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
 
   const retryLoad = () => {
     setRetryCount(0);
+    setError(null);
+    setPriceData(null);
+    setChartReady(false);
     loadCoinData();
   };
 
-  const chartUrl = coinData ? 
-    `https://www.coingecko.com/en/coins/${coinData.id}/embedded_chart?locale=en&vs_currency=usd&days=${days}` : 
-    '';
-
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg w-full max-w-4xl h-[80vh] flex flex-col">
+      <div className="bg-white rounded-lg w-full max-w-6xl h-[85vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gradient-to-r from-green-50 to-blue-50">
           <div className="flex items-center space-x-4">
-            {coinData && (
+            {coinData && coinData.image && (
               <img 
                 src={coinData.image} 
                 alt={coinData.name}
-                className="w-8 h-8 rounded-full"
+                className="w-10 h-10 rounded-full"
                 onError={(e) => {
-                  // Fallback если изображение не загружается
                   (e.target as HTMLImageElement).style.display = 'none';
                 }}
               />
             )}
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">
+              <h2 className="text-2xl font-bold text-gray-900 flex items-center">
+                <Globe className="w-6 h-6 mr-2 text-green-600" />
                 {coinData ? `${coinData.name} (${coinData.symbol})` : symbol}
               </h2>
-              <p className="text-gray-600">Данные CoinGecko</p>
+              <p className="text-gray-600">Данные CoinGecko API</p>
+              {coinData?.market_cap_rank && (
+                <p className="text-sm text-blue-600">
+                  Рейтинг по капитализации: #{coinData.market_cap_rank}
+                </p>
+              )}
               {error && (
                 <p className="text-sm text-red-600 mt-1 flex items-center">
                   <AlertTriangle className="w-3 h-3 mr-1" />
@@ -424,7 +688,7 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
         </div>
 
         {/* Content */}
-        <div className="flex-1 p-6">
+        <div className="flex-1 p-6 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
@@ -456,29 +720,44 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
                     </button>
                   </div>
                   {retryCount >= 3 && (
-                    <p className="text-sm text-gray-500 mt-4">
-                      Возможно, CoinGecko API временно недоступен или достигнут лимит запросов.
-                      Попробуйте позже или используйте прямую ссылку выше.
-                    </p>
+                    <div className="mt-4 p-4 bg-yellow-50 rounded-lg">
+                      <p className="text-sm text-yellow-800">
+                        <strong>Возможные причины:</strong>
+                      </p>
+                      <ul className="text-sm text-yellow-700 mt-2 space-y-1">
+                        <li>• CoinGecko API временно недоступен</li>
+                        <li>• Превышен лимит запросов (429 ошибка)</li>
+                        <li>• Проблемы с интернет-соединением</li>
+                        <li>• Монета не найдена в базе CoinGecko</li>
+                      </ul>
+                    </div>
                   )}
                 </div>
               </div>
             </div>
           ) : coinData ? (
-            <div className="h-full flex flex-col">
-              {/* Статистика */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-600">Цена</div>
-                  <div className="text-xl font-bold text-gray-900">
+            <div className="h-full flex flex-col space-y-6">
+              {/* Расширенная статистика */}
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-blue-200">
+                  <div className="text-sm text-blue-700 font-medium">Текущая цена</div>
+                  <div className="text-xl font-bold text-blue-900">
                     {formatNumber(coinData.current_price)}
                   </div>
                 </div>
                 
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-600">Изменение 24ч</div>
+                <div className={`bg-gradient-to-br p-4 rounded-lg border ${
+                  coinData.price_change_percentage_24h >= 0 
+                    ? 'from-green-50 to-green-100 border-green-200' 
+                    : 'from-red-50 to-red-100 border-red-200'
+                }`}>
+                  <div className={`text-sm font-medium ${
+                    coinData.price_change_percentage_24h >= 0 ? 'text-green-700' : 'text-red-700'
+                  }`}>
+                    Изменение 24ч
+                  </div>
                   <div className={`text-xl font-bold flex items-center ${
-                    coinData.price_change_percentage_24h >= 0 ? 'text-green-600' : 'text-red-600'
+                    coinData.price_change_percentage_24h >= 0 ? 'text-green-900' : 'text-red-900'
                   }`}>
                     {coinData.price_change_percentage_24h >= 0 ? (
                       <TrendingUp className="w-5 h-5 mr-1" />
@@ -489,58 +768,50 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
                   </div>
                 </div>
                 
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-600">Рыночная капитализация</div>
-                  <div className="text-xl font-bold text-gray-900">
+                <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg border border-purple-200">
+                  <div className="text-sm text-purple-700 font-medium">Рыночная кап.</div>
+                  <div className="text-xl font-bold text-purple-900">
                     {formatNumber(coinData.market_cap)}
                   </div>
                 </div>
                 
-                <div className="bg-gray-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-600">Объем торгов 24ч</div>
-                  <div className="text-xl font-bold text-gray-900">
+                <div className="bg-gradient-to-br from-orange-50 to-orange-100 p-4 rounded-lg border border-orange-200">
+                  <div className="text-sm text-orange-700 font-medium">Объем 24ч</div>
+                  <div className="text-xl font-bold text-orange-900">
                     {formatNumber(coinData.total_volume)}
                   </div>
                 </div>
+
+                {coinData.circulating_supply && (
+                  <div className="bg-gradient-to-br from-teal-50 to-teal-100 p-4 rounded-lg border border-teal-200">
+                    <div className="text-sm text-teal-700 font-medium">В обращении</div>
+                    <div className="text-xl font-bold text-teal-900">
+                      {formatSupply(coinData.circulating_supply)}
+                    </div>
+                  </div>
+                )}
+
+                {coinData.total_supply && (
+                  <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 p-4 rounded-lg border border-indigo-200">
+                    <div className="text-sm text-indigo-700 font-medium">Общий запас</div>
+                    <div className="text-xl font-bold text-indigo-900">
+                      {formatSupply(coinData.total_supply)}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* График */}
-              <div className="flex-1 bg-gray-50 rounded-lg overflow-hidden">
-                {chartUrl && !chartError ? (
-                  <iframe
-                    src={chartUrl}
-                    width="100%"
-                    height="100%"
-                    frameBorder="0"
-                    title={`${coinData.name} Chart`}
-                    className="w-full h-full"
-                    onError={() => {
-                      console.error('Chart iframe failed to load');
-                      setChartError(true);
-                    }}
-                    onLoad={() => {
-                      console.log('Chart iframe loaded successfully');
-                    }}
-                  />
+              <div className="flex-1 bg-gray-50 rounded-lg p-4 min-h-[400px]">
+                {chartReady ? (
+                  <div className="h-full">
+                    <canvas id="priceChart" className="w-full h-full"></canvas>
+                  </div>
                 ) : (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center">
-                      <AlertTriangle className="w-8 h-8 text-yellow-500 mx-auto mb-2" />
-                      <p className="text-gray-600 mb-4">График временно недоступен</p>
-                      <div className="space-y-2">
-                        <button
-                          onClick={() => setChartError(false)}
-                          className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors mr-2"
-                        >
-                          Попробовать снова
-                        </button>
-                        <button
-                          onClick={openCoinGecko}
-                          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
-                        >
-                          Открыть на CoinGecko
-                        </button>
-                      </div>
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-2"></div>
+                      <p className="text-gray-600">Загрузка графика...</p>
                     </div>
                   </div>
                 )}
@@ -556,7 +827,12 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
         {/* Footer */}
         <div className="p-4 border-t border-gray-200 bg-gray-50">
           <div className="flex justify-between items-center text-sm text-gray-600">
-            <span>Данные предоставлены CoinGecko API</span>
+            <div className="flex items-center space-x-4">
+              <span>Данные предоставлены CoinGecko API</span>
+              {coinData && (
+                <span>ID: {coinData.id}</span>
+              )}
+            </div>
             <div className="flex items-center space-x-4">
               <span>Обновляется каждые 5 минут</span>
               {retryCount > 0 && (
@@ -569,5 +845,13 @@ const CoinGeckoChart: React.FC<CoinGeckoChartProps> = ({ symbol, onClose }) => {
     </div>
   );
 };
+
+// Объявляем глобальные переменные для Chart.js
+declare global {
+  interface Window {
+    Chart: any;
+    chartInstance: any;
+  }
+}
 
 export default CoinGeckoChart;
